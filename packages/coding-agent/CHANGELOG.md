@@ -1,9 +1,9 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
+- Added fuzzy path matching suggestions when read tool encounters file-not-found errors, showing closest matches using Levenshtein distance
 - Added `status.shadowed` symbol for theme customization to properly indicate shadowed extension state
 - Added Biome CLI-based linter client as alternative to LSP for more reliable diagnostics
 - Added LinterClient interface for pluggable formatter/linter implementations
@@ -20,6 +20,7 @@
 
 ### Changed
 
+- Changed read tool to automatically redirect to ls when given a directory path instead of a file
 - Changed tool description prompts to be more concise with clearer usage guidelines and structured formatting
 - Moved tool description prompts from inline strings to external markdown files in `src/prompts/tools/` directory for better maintainability
 - Changed Exa web search provider from MCP protocol to direct REST API for simpler integration
