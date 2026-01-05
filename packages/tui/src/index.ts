@@ -47,6 +47,7 @@ export {
 	isCtrlU,
 	isCtrlV,
 	isCtrlW,
+	isCtrlY,
 	isCtrlZ,
 	isDelete,
 	isEnd,

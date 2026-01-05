@@ -1,6 +1,9 @@
 # Changelog
 
 ## [Unreleased]
+### Added
+
+- Added `isCtrlY` helper function for detecting Ctrl+Y keyboard input
 
 ## [3.15.1] - 2026-01-05
 

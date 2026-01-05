@@ -18,6 +18,7 @@ import type { AssistantMessage, ImageContent, Message, Model, TextContent, Usage
 import { isContextOverflow, modelsAreEqual, supportsXhigh } from "@oh-my-pi/pi-ai";
 import type { Rule } from "../capability/rule";
 import { getAuthPath } from "../config";
+import { parseModelString } from "./model-resolver";
 import { type BashResult, executeBash as executeBashCommand } from "./bash-executor";
 import {
 	type CompactionResult,
@@ -101,6 +102,13 @@ export interface ModelCycleResult {
 	thinkingLevel: ThinkingLevel;
 	/** Whether cycling through scoped models (--models flag) or all available */
 	isScoped: boolean;
+}
+
+/** Result from cycleRoleModels() */
+export interface RoleModelCycleResult {
+	model: Model<any>;
+	thinkingLevel: ThinkingLevel;
+	role: string;
 }
 
 /** Session statistics for /session command */
@@ -895,6 +903,55 @@ export class AgentSession {
 			return this._cycleScopedModel(direction);
 		}
 		return this._cycleAvailableModel(direction);
+	}
+
+	/**
+	 * Cycle through configured role models in a fixed order.
+	 * Skips missing roles and deduplicates models.
+	 */
+	async cycleRoleModels(roleOrder: string[]): Promise<RoleModelCycleResult | undefined> {
+		const availableModels = await this._modelRegistry.getAvailable();
+		if (availableModels.length === 0) return undefined;
+
+		const currentModel = this.model;
+		if (!currentModel) return undefined;
+		const roleModels: Array<{ role: string; model: Model<any> }> = [];
+		const seen = new Set<string>();
+
+		for (const role of roleOrder) {
+			const roleModelStr =
+				role === "default"
+					? this.settingsManager.getModelRole("default") ?? `${currentModel.provider}/${currentModel.id}`
+					: this.settingsManager.getModelRole(role);
+			if (!roleModelStr) continue;
+
+			const parsed = parseModelString(roleModelStr);
+			let match: Model<any> | undefined;
+			if (parsed) {
+				match = availableModels.find((m) => m.provider === parsed.provider && m.id === parsed.id);
+			}
+			if (!match) {
+				match = availableModels.find((m) => m.id.toLowerCase() === roleModelStr.toLowerCase());
+			}
+			if (!match) continue;
+
+			const key = `${match.provider}/${match.id}`;
+			if (seen.has(key)) continue;
+			seen.add(key);
+			roleModels.push({ role, model: match });
+		}
+
+		if (roleModels.length <= 1) return undefined;
+
+		let currentIndex = roleModels.findIndex((entry) => modelsAreEqual(entry.model, currentModel));
+		if (currentIndex === -1) currentIndex = 0;
+
+		const nextIndex = (currentIndex + 1) % roleModels.length;
+		const next = roleModels[nextIndex];
+
+		await this.setModel(next.model, next.role);
+
+		return { model: next.model, thinkingLevel: this.thinkingLevel, role: next.role };
 	}
 
 	private async _cycleScopedModel(direction: "forward" | "backward"): Promise<ModelCycleResult | undefined> {

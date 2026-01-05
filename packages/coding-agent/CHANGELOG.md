@@ -1,8 +1,10 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added `cycleRoleModels()` method to cycle through configured role-based models in a fixed order with deduplication
 - Added language-specific file icons to LSP diagnostics output showing file locations
 - Added language-specific file icon to edit tool header display
 
