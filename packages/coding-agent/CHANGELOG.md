@@ -1,7 +1,6 @@
 # Changelog
 
 ## [Unreleased]
-
 ### Added
 
 - Added `status.shadowed` symbol for theme customization to properly indicate shadowed extension state
@@ -20,6 +19,11 @@
 
 ### Changed
 
+- Changed compaction prompts to preserve tool outputs, command results, and repository state in context summaries
+- Changed init prompt to include runtime/tooling preferences section and improved formatting guidelines
+- Changed reviewer prompt to require evidence-backed findings anchored to diff hunks with stricter suggestion block formatting
+- Changed system prompt to include explicit core behavior guidelines for task completion and progress updates
+- Changed task prompt to emphasize end-to-end task completion and tool verification
 - Moved all prompt templates from inline strings to external markdown files in `src/prompts/` directory for better maintainability
 - Changed tool result renderers to use structured tree layouts with consistent expand hints and truncation indicators
 - Changed grep, find, and ls tools to show scope path and detailed truncation reasons in output

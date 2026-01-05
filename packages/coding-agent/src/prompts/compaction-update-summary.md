@@ -1,4 +1,5 @@
 The messages above are NEW conversation messages to incorporate into the existing summary provided in <previous-summary> tags.
+Update the structured handoff summary that another LLM will use to resume the task.
 
 Update the existing structured summary with new information. RULES:
 - PRESERVE all existing information from the previous summary
@@ -35,4 +36,6 @@ Use this EXACT format:
 ## Critical Context
 - [Preserve important context, add new if needed]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.
+Output only the structured summary. No extra text.
+
+Keep each section concise. Preserve exact file paths, function names, error messages, and relevant tool outputs or command results. Include repository state changes (branch, uncommitted changes) if mentioned.

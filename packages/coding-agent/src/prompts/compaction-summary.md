@@ -1,4 +1,4 @@
-The messages above are a conversation to summarize. Create a structured context checkpoint summary that another LLM will use to continue the work.
+The messages above are a conversation to summarize. Create a structured context checkpoint handoff summary that another LLM will use to resume the task.
 
 Use this EXACT format:
 
@@ -29,4 +29,6 @@ Use this EXACT format:
 - [Any data, examples, or references needed to continue]
 - [Or "(none)" if not applicable]
 
-Keep each section concise. Preserve exact file paths, function names, and error messages.
+Output only the structured summary. No extra text.
+
+Keep each section concise. Preserve exact file paths, function names, error messages, and relevant tool outputs or command results. Include repository state changes (branch, uncommitted changes) if mentioned.

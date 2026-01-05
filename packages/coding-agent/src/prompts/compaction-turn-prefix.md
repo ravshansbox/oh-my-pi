@@ -11,4 +11,6 @@ Summarize the prefix to provide context for the retained suffix:
 ## Context for Suffix
 - [Information needed to understand the retained recent work]
 
-Be concise. Focus on what's needed to understand the kept suffix.
+Output only the structured summary. No extra text.
+
+Be concise. Preserve exact file paths, function names, error messages, and relevant tool outputs or command results if they appear. Focus on what's needed to understand the kept suffix.

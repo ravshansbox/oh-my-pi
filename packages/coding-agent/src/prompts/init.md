@@ -10,10 +10,14 @@ Analyze this codebase and generate an AGENTS.md file that documents:
 3. **Development Commands**: How to build, test, lint the project
 4. **Code Conventions**: Formatting, naming, patterns used
 5. **Important Files**: Entry points, config files, key modules
+6. **Runtime/Tooling Preferences**: Required runtime (for example, Bun vs Node), package manager, and tooling constraints
 
 Guidelines:
+- Title the document "Repository Guidelines"
+- Use Markdown headings (#, ##, etc.) for structure
 - Be concise and practical
 - Focus on what an AI assistant needs to know to help with this codebase
+- Include examples where helpful (commands, directory paths, naming patterns)
 - Include file paths where relevant
 - Don't include information that's obvious from the code structure
 
