@@ -1,12 +1,27 @@
 import { existsSync, type Stats, statSync } from "node:fs";
 import path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
 import { globSync } from "glob";
+import { getLanguageFromPath, type Theme } from "../../modes/interactive/theme/theme";
 import findDescription from "../../prompts/tools/find.md" with { type: "text" };
 import { ensureTool } from "../../utils/tools-manager";
+import type { RenderResultOptions } from "../custom-tools/types";
 import { untilAborted } from "../utils";
 import { resolveToCwd } from "./path-utils";
+import {
+	formatCount,
+	formatEmptyMessage,
+	formatErrorMessage,
+	formatExpandHint,
+	formatMeta,
+	formatMoreItems,
+	formatScope,
+	formatTruncationSuffix,
+	PREVIEW_LIMITS,
+} from "./render-utils";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate";
 
 const findSchema = Type.Object({
@@ -248,3 +263,143 @@ export function createFindTool(cwd: string): AgentTool<typeof findSchema> {
 
 /** Default find tool using process.cwd() - for backwards compatibility */
 export const findTool = createFindTool(process.cwd());
+
+// =============================================================================
+// TUI Renderer
+// =============================================================================
+
+interface FindRenderArgs {
+	pattern: string;
+	path?: string;
+	type?: string;
+	hidden?: boolean;
+	sortByMtime?: boolean;
+	limit?: number;
+}
+
+const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
+
+export const findToolRenderer = {
+	renderCall(args: FindRenderArgs, uiTheme: Theme): Component {
+		const label = uiTheme.fg("toolTitle", uiTheme.bold("Find"));
+		let text = `${label} ${uiTheme.fg("accent", args.pattern || "*")}`;
+
+		const meta: string[] = [];
+		if (args.path) meta.push(`in ${args.path}`);
+		if (args.type && args.type !== "all") meta.push(`type:${args.type}`);
+		if (args.hidden) meta.push("hidden");
+		if (args.sortByMtime) meta.push("sort:mtime");
+		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
+
+		text += formatMeta(meta, uiTheme);
+
+		return new Text(text, 0, 0);
+	},
+
+	renderResult(
+		result: { content: Array<{ type: string; text?: string }>; details?: FindToolDetails },
+		{ expanded }: RenderResultOptions,
+		uiTheme: Theme,
+	): Component {
+		const details = result.details;
+
+		if (details?.error) {
+			return new Text(formatErrorMessage(details.error, uiTheme), 0, 0);
+		}
+
+		const hasDetailedData = details?.fileCount !== undefined;
+		const textContent = result.content?.find((c) => c.type === "text")?.text;
+
+		if (!hasDetailedData) {
+			if (!textContent || textContent.includes("No files matching") || textContent.trim() === "") {
+				return new Text(formatEmptyMessage("No files found", uiTheme), 0, 0);
+			}
+
+			const lines = textContent.split("\n").filter((l) => l.trim());
+			const maxLines = expanded ? lines.length : Math.min(lines.length, COLLAPSED_LIST_LIMIT);
+			const displayLines = lines.slice(0, maxLines);
+			const remaining = lines.length - maxLines;
+			const hasMore = remaining > 0;
+
+			const icon = uiTheme.styledSymbol("status.success", "success");
+			const summary = formatCount("file", lines.length);
+			const expandHint = formatExpandHint(expanded, hasMore, uiTheme);
+			let text = `${icon} ${uiTheme.fg("dim", summary)}${expandHint}`;
+
+			for (let i = 0; i < displayLines.length; i++) {
+				const isLast = i === displayLines.length - 1 && remaining === 0;
+				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
+				text += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("accent", displayLines[i])}`;
+			}
+			if (remaining > 0) {
+				text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg(
+					"muted",
+					formatMoreItems(remaining, "file", uiTheme),
+				)}`;
+			}
+			return new Text(text, 0, 0);
+		}
+
+		const fileCount = details?.fileCount ?? 0;
+		const truncated = details?.truncated ?? details?.truncation?.truncated ?? false;
+		const files = details?.files ?? [];
+
+		if (fileCount === 0) {
+			return new Text(formatEmptyMessage("No files found", uiTheme), 0, 0);
+		}
+
+		const icon = uiTheme.styledSymbol("status.success", "success");
+		const summaryText = formatCount("file", fileCount);
+		const scopeLabel = formatScope(details?.scopePath, uiTheme);
+		const maxFiles = expanded ? files.length : Math.min(files.length, COLLAPSED_LIST_LIMIT);
+		const hasMoreFiles = files.length > maxFiles;
+		const expandHint = formatExpandHint(expanded, hasMoreFiles, uiTheme);
+
+		let text = `${icon} ${uiTheme.fg("dim", summaryText)}${formatTruncationSuffix(
+			truncated,
+			uiTheme,
+		)}${scopeLabel}${expandHint}`;
+
+		const truncationReasons: string[] = [];
+		if (details?.resultLimitReached) {
+			truncationReasons.push(`limit ${details.resultLimitReached} results`);
+		}
+		if (details?.truncation?.truncated) {
+			truncationReasons.push("size limit");
+		}
+
+		const hasTruncation = truncationReasons.length > 0;
+
+		if (files.length > 0) {
+			for (let i = 0; i < maxFiles; i++) {
+				const isLast = i === maxFiles - 1 && !hasMoreFiles && !hasTruncation;
+				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
+				const entry = files[i];
+				const isDir = entry.endsWith("/");
+				const entryPath = isDir ? entry.slice(0, -1) : entry;
+				const lang = isDir ? undefined : getLanguageFromPath(entryPath);
+				const entryIcon = isDir
+					? uiTheme.fg("accent", uiTheme.icon.folder)
+					: uiTheme.fg("muted", uiTheme.getLangIcon(lang));
+				text += `\n ${uiTheme.fg("dim", branch)} ${entryIcon} ${uiTheme.fg("accent", entry)}`;
+			}
+
+			if (hasMoreFiles) {
+				const moreFilesBranch = hasTruncation ? uiTheme.tree.branch : uiTheme.tree.last;
+				text += `\n ${uiTheme.fg("dim", moreFilesBranch)} ${uiTheme.fg(
+					"muted",
+					formatMoreItems(files.length - maxFiles, "file", uiTheme),
+				)}`;
+			}
+		}
+
+		if (hasTruncation) {
+			text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg(
+				"warning",
+				`truncated: ${truncationReasons.join(", ")}`,
+			)}`;
+		}
+
+		return new Text(text, 0, 0);
+	},
+};

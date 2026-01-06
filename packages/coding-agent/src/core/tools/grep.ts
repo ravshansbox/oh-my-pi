@@ -1,11 +1,26 @@
 import { readFileSync, type Stats, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
 import type { Subprocess } from "bun";
+import { getLanguageFromPath, type Theme } from "../../modes/interactive/theme/theme";
 import grepDescription from "../../prompts/tools/grep.md" with { type: "text" };
 import { ensureTool } from "../../utils/tools-manager";
+import type { RenderResultOptions } from "../custom-tools/types";
 import { resolveToCwd } from "./path-utils";
+import {
+	formatCount,
+	formatEmptyMessage,
+	formatErrorMessage,
+	formatExpandHint,
+	formatMeta,
+	formatMoreItems,
+	formatScope,
+	formatTruncationSuffix,
+	PREVIEW_LIMITS,
+} from "./render-utils";
 import {
 	DEFAULT_MAX_BYTES,
 	formatSize,
@@ -582,3 +597,179 @@ export function createGrepTool(cwd: string): AgentTool<typeof grepSchema> {
 
 /** Default grep tool using process.cwd() - for backwards compatibility */
 export const grepTool = createGrepTool(process.cwd());
+
+// =============================================================================
+// TUI Renderer
+// =============================================================================
+
+interface GrepRenderArgs {
+	pattern: string;
+	path?: string;
+	glob?: string;
+	type?: string;
+	ignoreCase?: boolean;
+	caseSensitive?: boolean;
+	literal?: boolean;
+	multiline?: boolean;
+	context?: number;
+	limit?: number;
+	outputMode?: string;
+}
+
+const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
+const COLLAPSED_TEXT_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
+
+export const grepToolRenderer = {
+	renderCall(args: GrepRenderArgs, uiTheme: Theme): Component {
+		const label = uiTheme.fg("toolTitle", uiTheme.bold("Grep"));
+		let text = `${label} ${uiTheme.fg("accent", args.pattern || "?")}`;
+
+		const meta: string[] = [];
+		if (args.path) meta.push(`in ${args.path}`);
+		if (args.glob) meta.push(`glob:${args.glob}`);
+		if (args.type) meta.push(`type:${args.type}`);
+		if (args.outputMode && args.outputMode !== "files_with_matches") meta.push(`mode:${args.outputMode}`);
+		if (args.caseSensitive) {
+			meta.push("case:sensitive");
+		} else if (args.ignoreCase) {
+			meta.push("case:insensitive");
+		}
+		if (args.literal) meta.push("literal");
+		if (args.multiline) meta.push("multiline");
+		if (args.context !== undefined) meta.push(`context:${args.context}`);
+		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
+
+		text += formatMeta(meta, uiTheme);
+
+		return new Text(text, 0, 0);
+	},
+
+	renderResult(
+		result: { content: Array<{ type: string; text?: string }>; details?: GrepToolDetails },
+		{ expanded }: RenderResultOptions,
+		uiTheme: Theme,
+	): Component {
+		const details = result.details;
+
+		if (details?.error) {
+			return new Text(formatErrorMessage(details.error, uiTheme), 0, 0);
+		}
+
+		const hasDetailedData = details?.matchCount !== undefined || details?.fileCount !== undefined;
+
+		if (!hasDetailedData) {
+			const textContent = result.content?.find((c) => c.type === "text")?.text;
+			if (!textContent || textContent === "No matches found") {
+				return new Text(formatEmptyMessage("No matches found", uiTheme), 0, 0);
+			}
+
+			const lines = textContent.split("\n").filter((line) => line.trim() !== "");
+			const maxLines = expanded ? lines.length : Math.min(lines.length, COLLAPSED_TEXT_LIMIT);
+			const displayLines = lines.slice(0, maxLines);
+			const remaining = lines.length - maxLines;
+			const hasMore = remaining > 0;
+
+			const icon = uiTheme.styledSymbol("status.success", "success");
+			const summary = formatCount("item", lines.length);
+			const expandHint = formatExpandHint(expanded, hasMore, uiTheme);
+			let text = `${icon} ${uiTheme.fg("dim", summary)}${expandHint}`;
+
+			for (let i = 0; i < displayLines.length; i++) {
+				const isLast = i === displayLines.length - 1 && remaining === 0;
+				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
+				text += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("toolOutput", displayLines[i])}`;
+			}
+
+			if (remaining > 0) {
+				text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg(
+					"muted",
+					formatMoreItems(remaining, "item", uiTheme),
+				)}`;
+			}
+
+			return new Text(text, 0, 0);
+		}
+
+		const matchCount = details?.matchCount ?? 0;
+		const fileCount = details?.fileCount ?? 0;
+		const mode = details?.mode ?? "files_with_matches";
+		const truncated = details?.truncated ?? details?.truncation?.truncated ?? false;
+		const files = details?.files ?? [];
+
+		if (matchCount === 0) {
+			return new Text(formatEmptyMessage("No matches found", uiTheme), 0, 0);
+		}
+
+		const icon = uiTheme.styledSymbol("status.success", "success");
+		const summaryParts =
+			mode === "files_with_matches"
+				? [formatCount("file", fileCount)]
+				: [formatCount("match", matchCount), formatCount("file", fileCount)];
+		const summaryText = summaryParts.join(uiTheme.sep.dot);
+		const scopeLabel = formatScope(details?.scopePath, uiTheme);
+
+		const fileEntries: Array<{ path: string; count?: number }> = details?.fileMatches?.length
+			? details.fileMatches.map((entry) => ({ path: entry.path, count: entry.count }))
+			: files.map((path) => ({ path }));
+		const maxFiles = expanded ? fileEntries.length : Math.min(fileEntries.length, COLLAPSED_LIST_LIMIT);
+		const hasMoreFiles = fileEntries.length > maxFiles;
+		const expandHint = formatExpandHint(expanded, hasMoreFiles, uiTheme);
+
+		let text = `${icon} ${uiTheme.fg("dim", summaryText)}${formatTruncationSuffix(
+			truncated,
+			uiTheme,
+		)}${scopeLabel}${expandHint}`;
+
+		const truncationReasons: string[] = [];
+		if (details?.matchLimitReached) {
+			truncationReasons.push(`limit ${details.matchLimitReached} matches`);
+		}
+		if (details?.headLimitReached) {
+			truncationReasons.push(`head limit ${details.headLimitReached}`);
+		}
+		if (details?.truncation?.truncated) {
+			truncationReasons.push("size limit");
+		}
+		if (details?.linesTruncated) {
+			truncationReasons.push("line length");
+		}
+
+		const hasTruncation = truncationReasons.length > 0;
+
+		if (fileEntries.length > 0) {
+			for (let i = 0; i < maxFiles; i++) {
+				const entry = fileEntries[i];
+				const isLast = i === maxFiles - 1 && !hasMoreFiles && !hasTruncation;
+				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
+				const isDir = entry.path.endsWith("/");
+				const entryPath = isDir ? entry.path.slice(0, -1) : entry.path;
+				const lang = isDir ? undefined : getLanguageFromPath(entryPath);
+				const entryIcon = isDir
+					? uiTheme.fg("accent", uiTheme.icon.folder)
+					: uiTheme.fg("muted", uiTheme.getLangIcon(lang));
+				const countLabel =
+					entry.count !== undefined
+						? ` ${uiTheme.fg("dim", `(${entry.count} match${entry.count !== 1 ? "es" : ""})`)}`
+						: "";
+				text += `\n ${uiTheme.fg("dim", branch)} ${entryIcon} ${uiTheme.fg("accent", entry.path)}${countLabel}`;
+			}
+
+			if (hasMoreFiles) {
+				const moreFilesBranch = hasTruncation ? uiTheme.tree.branch : uiTheme.tree.last;
+				text += `\n ${uiTheme.fg("dim", moreFilesBranch)} ${uiTheme.fg(
+					"muted",
+					formatMoreItems(fileEntries.length - maxFiles, "file", uiTheme),
+				)}`;
+			}
+		}
+
+		if (hasTruncation) {
+			text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg(
+				"warning",
+				`truncated: ${truncationReasons.join(", ")}`,
+			)}`;
+		}
+
+		return new Text(text, 0, 0);
+	},
+};

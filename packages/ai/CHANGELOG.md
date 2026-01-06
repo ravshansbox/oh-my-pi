@@ -1,6 +1,12 @@
 # Changelog
 
 ## [Unreleased]
+
+### Added
+
+- Added Google Vertex AI provider with Gemini 1.5, 2.0, 2.5, and 3.0 model support
+- Added GPT-5 series models (gpt-5, gpt-5.1, gpt-5.2 and variants) to OpenAI Codex provider
+
 ### Changed
 
 - Changed default reasoning summary from `auto` to `detailed` for OpenAI Codex provider

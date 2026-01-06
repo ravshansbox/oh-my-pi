@@ -1,10 +1,24 @@
 import { existsSync, readdirSync, statSync } from "node:fs";
 import nodePath from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { getLanguageFromPath, type Theme } from "../../modes/interactive/theme/theme";
+import type { RenderResultOptions } from "../custom-tools/types";
 import { untilAborted } from "../utils";
 import { resolveToCwd } from "./path-utils";
-import { formatAge } from "./render-utils";
+import {
+	formatAge,
+	formatBytes,
+	formatCount,
+	formatEmptyMessage,
+	formatExpandHint,
+	formatMeta,
+	formatMoreItems,
+	formatTruncationSuffix,
+	PREVIEW_LIMITS,
+} from "./render-utils";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate";
 
 const lsSchema = Type.Object({
@@ -147,3 +161,122 @@ export function createLsTool(cwd: string): AgentTool<typeof lsSchema> {
 
 /** Default ls tool using process.cwd() - for backwards compatibility */
 export const lsTool = createLsTool(process.cwd());
+
+// =============================================================================
+// TUI Renderer
+// =============================================================================
+
+interface LsRenderArgs {
+	path?: string;
+	limit?: number;
+}
+
+const COLLAPSED_LIST_LIMIT = PREVIEW_LIMITS.COLLAPSED_ITEMS;
+
+export const lsToolRenderer = {
+	renderCall(args: LsRenderArgs, uiTheme: Theme): Component {
+		const label = uiTheme.fg("toolTitle", uiTheme.bold("Ls"));
+		let text = `${label} ${uiTheme.fg("accent", args.path || ".")}`;
+
+		const meta: string[] = [];
+		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
+		text += formatMeta(meta, uiTheme);
+
+		return new Text(text, 0, 0);
+	},
+
+	renderResult(
+		result: { content: Array<{ type: string; text?: string }>; details?: LsToolDetails },
+		{ expanded }: RenderResultOptions,
+		uiTheme: Theme,
+	): Component {
+		const details = result.details;
+		const textContent = result.content?.find((c) => c.type === "text")?.text ?? "";
+
+		if (
+			(!textContent || textContent.trim() === "" || textContent.trim() === "(empty directory)") &&
+			(!details?.entries || details.entries.length === 0)
+		) {
+			return new Text(formatEmptyMessage("Empty directory", uiTheme), 0, 0);
+		}
+
+		let entries: string[] = details?.entries ? [...details.entries] : [];
+		if (entries.length === 0) {
+			const rawLines = textContent.split("\n").filter((l: string) => l.trim());
+			entries = rawLines.filter((line) => !/^\[.*\]$/.test(line.trim()));
+		}
+
+		if (entries.length === 0) {
+			return new Text(formatEmptyMessage("Empty directory", uiTheme), 0, 0);
+		}
+
+		let dirCount = details?.dirCount;
+		let fileCount = details?.fileCount;
+		if (dirCount === undefined || fileCount === undefined) {
+			dirCount = 0;
+			fileCount = 0;
+			for (const entry of entries) {
+				if (entry.endsWith("/")) {
+					dirCount += 1;
+				} else {
+					fileCount += 1;
+				}
+			}
+		}
+
+		const truncated = Boolean(details?.truncation?.truncated || details?.entryLimitReached);
+		const icon = truncated
+			? uiTheme.styledSymbol("status.warning", "warning")
+			: uiTheme.styledSymbol("status.success", "success");
+
+		const summaryText = [formatCount("dir", dirCount ?? 0), formatCount("file", fileCount ?? 0)].join(
+			uiTheme.sep.dot,
+		);
+		const maxEntries = expanded ? entries.length : Math.min(entries.length, COLLAPSED_LIST_LIMIT);
+		const hasMoreEntries = entries.length > maxEntries;
+		const expandHint = formatExpandHint(expanded, hasMoreEntries, uiTheme);
+
+		let text = `${icon} ${uiTheme.fg("dim", summaryText)}${formatTruncationSuffix(truncated, uiTheme)}${expandHint}`;
+
+		const truncationReasons: string[] = [];
+		if (details?.entryLimitReached) {
+			truncationReasons.push(`entry limit ${details.entryLimitReached}`);
+		}
+		if (details?.truncation?.truncated) {
+			truncationReasons.push(`output cap ${formatBytes(details.truncation.maxBytes)}`);
+		}
+
+		const hasTruncation = truncationReasons.length > 0;
+
+		for (let i = 0; i < maxEntries; i++) {
+			const entry = entries[i];
+			const isLast = i === maxEntries - 1 && !hasMoreEntries && !hasTruncation;
+			const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
+			const isDir = entry.endsWith("/");
+			const entryPath = isDir ? entry.slice(0, -1) : entry;
+			const lang = isDir ? undefined : getLanguageFromPath(entryPath);
+			const entryIcon = isDir
+				? uiTheme.fg("accent", uiTheme.icon.folder)
+				: uiTheme.fg("muted", uiTheme.getLangIcon(lang));
+			const entryColor = isDir ? "accent" : "toolOutput";
+			text += `\n ${uiTheme.fg("dim", branch)} ${entryIcon} ${uiTheme.fg(entryColor, entry)}`;
+		}
+
+		if (hasMoreEntries) {
+			const moreEntriesBranch = hasTruncation ? uiTheme.tree.branch : uiTheme.tree.last;
+			text += `\n ${uiTheme.fg("dim", moreEntriesBranch)} ${uiTheme.fg(
+				"muted",
+				formatMoreItems(entries.length - maxEntries, "entry", uiTheme),
+			)}`;
+		}
+
+		if (hasTruncation) {
+			text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg(
+				"warning",
+				`truncated: ${truncationReasons.join(", ")}`,
+			)}`;
+		}
+
+		return new Text(text, 0, 0);
+	},
+};

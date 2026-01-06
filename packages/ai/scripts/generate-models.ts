@@ -1,9 +1,13 @@
 #!/usr/bin/env bun
 
-import { join } from "node:path";
+import { writeFileSync } from "fs";
+import { join, dirname } from "path";
+import { fileURLToPath } from "url";
 import { Api, KnownProvider, Model } from "../src/types";
 
-const packageRoot = join(import.meta.dir, "..");
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const packageRoot = join(__dirname, "..");
 
 interface ModelsDevModel {
 	id: string;
@@ -440,6 +444,170 @@ async function generateModels() {
 		});
 	}
 
+	// OpenAI Codex (ChatGPT OAuth) models
+	const CODEX_BASE_URL = "https://chatgpt.com/backend-api";
+	const CODEX_CONTEXT = 400000;
+	const CODEX_MAX_TOKENS = 128000;
+	const codexModels: Model<"openai-codex-responses">[] = [
+		{
+			id: "gpt-5.2-codex",
+			name: "GPT-5.2 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.2",
+			name: "GPT-5.2",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.1-codex-max",
+			name: "GPT-5.1 Codex Max",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.1-codex",
+			name: "GPT-5.1 Codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.1-codex-mini",
+			name: "GPT-5.1 Codex Mini",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "codex-mini-latest",
+			name: "Codex Mini Latest",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5-codex-mini",
+			name: "gpt-5-codex-mini",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5-codex",
+			name: "gpt-5-codex",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.1",
+			name: "GPT-5.1",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5.1-chat-latest",
+			name: "gpt-5.1-chat-latest",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5",
+			name: "gpt-5",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5-mini",
+			name: "gpt-5-mini",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+		{
+			id: "gpt-5-nano",
+			name: "gpt-5-nano",
+			api: "openai-codex-responses",
+			provider: "openai-codex",
+			baseUrl: CODEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+			contextWindow: CODEX_CONTEXT,
+			maxTokens: CODEX_MAX_TOKENS,
+		},
+	];
+	allModels.push(...codexModels);
+
 	// Add missing Grok models
 	if (!allModels.some((m) => m.provider === "xai" && m.id === "grok-code-fast-1")) {
 		allModels.push({
@@ -642,6 +810,143 @@ async function generateModels() {
 	];
 	allModels.push(...antigravityModels);
 
+	const VERTEX_BASE_URL = "https://{location}-aiplatform.googleapis.com";
+	const vertexModels: Model<"google-vertex">[] = [
+		{
+			id: "gemini-3-pro-preview",
+			name: "Gemini 3 Pro Preview (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 0 },
+			contextWindow: 1000000,
+			maxTokens: 64000,
+		},
+		{
+			id: "gemini-3-flash-preview",
+			name: "Gemini 3 Flash Preview (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 65536,
+		},
+		{
+			id: "gemini-2.0-flash",
+			name: "Gemini 2.0 Flash (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: false,
+			input: ["text", "image"],
+			cost: { input: 0.15, output: 0.6, cacheRead: 0.0375, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 8192,
+		},
+		{
+			id: "gemini-2.0-flash-lite",
+			name: "Gemini 2.0 Flash Lite (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0.075, output: 0.3, cacheRead: 0.01875, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 65536,
+		},
+		{
+			id: "gemini-2.5-pro",
+			name: "Gemini 2.5 Pro (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 65536,
+		},
+		{
+			id: "gemini-2.5-flash",
+			name: "Gemini 2.5 Flash (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 65536,
+		},
+		{
+			id: "gemini-2.5-flash-lite-preview-09-2025",
+			name: "Gemini 2.5 Flash Lite Preview 09-25 (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 65536,
+		},
+		{
+			id: "gemini-2.5-flash-lite",
+			name: "Gemini 2.5 Flash Lite (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: true,
+			input: ["text", "image"],
+			cost: { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite: 0 },
+			contextWindow: 1048576,
+			maxTokens: 65536,
+		},
+		{
+			id: "gemini-1.5-pro",
+			name: "Gemini 1.5 Pro (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: false,
+			input: ["text", "image"],
+			cost: { input: 1.25, output: 5, cacheRead: 0.3125, cacheWrite: 0 },
+			contextWindow: 1000000,
+			maxTokens: 8192,
+		},
+		{
+			id: "gemini-1.5-flash",
+			name: "Gemini 1.5 Flash (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: false,
+			input: ["text", "image"],
+			cost: { input: 0.075, output: 0.3, cacheRead: 0.01875, cacheWrite: 0 },
+			contextWindow: 1000000,
+			maxTokens: 8192,
+		},
+		{
+			id: "gemini-1.5-flash-8b",
+			name: "Gemini 1.5 Flash-8B (Vertex)",
+			api: "google-vertex",
+			provider: "google-vertex",
+			baseUrl: VERTEX_BASE_URL,
+			reasoning: false,
+			input: ["text", "image"],
+			cost: { input: 0.0375, output: 0.15, cacheRead: 0.01, cacheWrite: 0 },
+			contextWindow: 1000000,
+			maxTokens: 8192,
+		},
+	];
+	allModels.push(...vertexModels);
+
 	// Group by provider and deduplicate by model ID
 	const providers: Record<string, Record<string, Model<any>>> = {};
 	for (const model of allModels) {
@@ -708,7 +1013,7 @@ export const MODELS = {
 `;
 
 	// Write file
-	await Bun.write(join(packageRoot, "src/models.generated.ts"), output);
+	writeFileSync(join(packageRoot, "src/models.generated.ts"), output);
 	console.log("Generated src/models.generated.ts");
 
 	// Print statistics

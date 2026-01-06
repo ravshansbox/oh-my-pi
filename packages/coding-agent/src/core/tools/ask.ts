@@ -16,9 +16,13 @@
  */
 
 import type { AgentTool, AgentToolContext, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
-import { theme } from "../../modes/interactive/theme/theme";
+import { type Theme, theme } from "../../modes/interactive/theme/theme";
 import askDescription from "../../prompts/tools/ask.md" with { type: "text" };
+import type { RenderResultOptions } from "../custom-tools/types";
+import { formatErrorMessage, formatMeta } from "./render-utils";
 
 // =============================================================================
 // Types
@@ -191,3 +195,86 @@ export function createAskTool(_cwd: string): AgentTool<typeof askSchema, AskTool
 
 /** Default ask tool using process.cwd() - for backwards compatibility (no UI) */
 export const askTool = createAskTool(process.cwd());
+
+// =============================================================================
+// TUI Renderer
+// =============================================================================
+
+interface AskRenderArgs {
+	question: string;
+	options?: Array<{ label: string }>;
+	multi?: boolean;
+}
+
+export const askToolRenderer = {
+	renderCall(args: AskRenderArgs, uiTheme: Theme): Component {
+		if (!args.question) {
+			return new Text(formatErrorMessage("No question provided", uiTheme), 0, 0);
+		}
+
+		const label = uiTheme.fg("toolTitle", uiTheme.bold("Ask"));
+		let text = `${label} ${uiTheme.fg("accent", args.question)}`;
+
+		const meta: string[] = [];
+		if (args.multi) meta.push("multi");
+		if (args.options?.length) meta.push(`options:${args.options.length}`);
+		text += formatMeta(meta, uiTheme);
+
+		if (args.options?.length) {
+			for (let i = 0; i < args.options.length; i++) {
+				const opt = args.options[i];
+				const isLast = i === args.options.length - 1;
+				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
+				text += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg(
+					"dim",
+					uiTheme.checkbox.unchecked,
+				)} ${uiTheme.fg("muted", opt.label)}`;
+			}
+		}
+
+		return new Text(text, 0, 0);
+	},
+
+	renderResult(
+		result: { content: Array<{ type: string; text?: string }>; details?: AskToolDetails },
+		_opts: RenderResultOptions,
+		uiTheme: Theme,
+	): Component {
+		const { details } = result;
+		if (!details) {
+			const txt = result.content[0];
+			return new Text(txt?.type === "text" && txt.text ? txt.text : "", 0, 0);
+		}
+
+		const hasSelection = details.customInput || details.selectedOptions.length > 0;
+		const statusIcon = hasSelection
+			? uiTheme.styledSymbol("status.success", "success")
+			: uiTheme.styledSymbol("status.warning", "warning");
+
+		let text = `${statusIcon} ${uiTheme.fg("accent", details.question)}`;
+
+		if (details.customInput) {
+			text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.styledSymbol(
+				"status.success",
+				"success",
+			)} ${uiTheme.fg("toolOutput", details.customInput)}`;
+		} else if (details.selectedOptions.length > 0) {
+			const selected = details.selectedOptions;
+			for (let i = 0; i < selected.length; i++) {
+				const isLast = i === selected.length - 1;
+				const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
+				text += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg(
+					"success",
+					uiTheme.checkbox.checked,
+				)} ${uiTheme.fg("toolOutput", selected[i])}`;
+			}
+		} else {
+			text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.styledSymbol(
+				"status.warning",
+				"warning",
+			)} ${uiTheme.fg("warning", "Cancelled")}`;
+		}
+
+		return new Text(text, 0, 0);
+	},
+};

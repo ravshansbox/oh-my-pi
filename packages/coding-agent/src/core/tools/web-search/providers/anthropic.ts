@@ -37,7 +37,7 @@ async function callWebSearch(
 	model: string,
 	query: string,
 	systemPrompt?: string,
-	maxTokens?: number
+	maxTokens?: number,
 ): Promise<AnthropicApiResponse> {
 	const url = buildAnthropicUrl(auth);
 	const headers = buildAnthropicHeaders(auth);
@@ -84,7 +84,7 @@ async function callWebSearch(
 		throw new WebSearchProviderError(
 			"anthropic",
 			`Anthropic API error (${response.status}): ${errorText}`,
-			response.status
+			response.status,
 		);
 	}
 
@@ -185,7 +185,7 @@ export async function searchAnthropic(params: AnthropicSearchParams): Promise<We
 	const auth = await findAnthropicAuth();
 	if (!auth) {
 		throw new Error(
-			"No Anthropic credentials found. Set ANTHROPIC_API_KEY or configure OAuth in ~/.omp/agent/auth.json"
+			"No Anthropic credentials found. Set ANTHROPIC_API_KEY or configure OAuth in ~/.omp/agent/auth.json",
 		);
 	}
 

@@ -1,9 +1,15 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
+import { getLanguageFromPath, type Theme } from "../../modes/interactive/theme/theme";
 import editDescription from "../../prompts/tools/edit.md" with { type: "text" };
+import type { RenderResultOptions } from "../custom-tools/types";
 import {
 	DEFAULT_FUZZY_THRESHOLD,
 	detectLineEnding,
+	type EditDiffError,
+	type EditDiffResult,
 	EditMatchError,
 	findEditMatch,
 	generateDiffString,
@@ -13,6 +19,14 @@ import {
 } from "./edit-diff";
 import { type FileDiagnosticsResult, type WritethroughCallback, writethroughNoop } from "./lsp/index";
 import { resolveToCwd } from "./path-utils";
+import {
+	formatDiagnostics,
+	formatDiffStats,
+	getDiffStats,
+	shortenPath,
+	truncateDiffByHunk,
+	wrapBrackets,
+} from "./render-utils";
 
 const editSchema = Type.Object({
 	path: Type.String({ description: "Path to the file to edit (relative or absolute)" }),
@@ -191,3 +205,130 @@ export function createEditTool(cwd: string, options: EditToolOptions = {}): Agen
 
 /** Default edit tool using process.cwd() - for backwards compatibility */
 export const editTool = createEditTool(process.cwd());
+
+// =============================================================================
+// TUI Renderer
+// =============================================================================
+
+interface EditRenderArgs {
+	path?: string;
+	file_path?: string;
+	oldText?: string;
+	newText?: string;
+	all?: boolean;
+}
+
+/** Extended context for edit tool rendering */
+export interface EditRenderContext {
+	/** Pre-computed diff preview (computed before tool executes) */
+	editDiffPreview?: EditDiffResult | EditDiffError;
+	/** Function to render diff text with syntax highlighting */
+	renderDiff?: (diffText: string, options?: { filePath?: string }) => string;
+}
+
+const EDIT_DIFF_PREVIEW_HUNKS = 2;
+const EDIT_DIFF_PREVIEW_LINES = 24;
+
+function countLines(text: string): number {
+	if (!text) return 0;
+	return text.split("\n").length;
+}
+
+function formatMetadataLine(lineCount: number | null, language: string | undefined, uiTheme: Theme): string {
+	const icon = uiTheme.getLangIcon(language);
+	if (lineCount !== null) {
+		return uiTheme.fg("dim", `${icon} ${lineCount} lines`);
+	}
+	return uiTheme.fg("dim", `${icon}`);
+}
+
+export const editToolRenderer = {
+	renderCall(args: EditRenderArgs, uiTheme: Theme): Component {
+		const rawPath = args.file_path || args.path || "";
+		const filePath = shortenPath(rawPath);
+		const editLanguage = getLanguageFromPath(rawPath) ?? "text";
+		const editIcon = uiTheme.fg("muted", uiTheme.getLangIcon(editLanguage));
+		const pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", uiTheme.format.ellipsis);
+
+		const text = `${uiTheme.fg("toolTitle", uiTheme.bold("Edit"))} ${editIcon} ${pathDisplay}`;
+		return new Text(text, 0, 0);
+	},
+
+	renderResult(
+		result: { content: Array<{ type: string; text?: string }>; details?: EditToolDetails; isError?: boolean },
+		options: RenderResultOptions & { renderContext?: EditRenderContext },
+		uiTheme: Theme,
+		args?: EditRenderArgs,
+	): Component {
+		const { expanded, renderContext } = options;
+		const rawPath = args?.file_path || args?.path || "";
+		const filePath = shortenPath(rawPath);
+		const editLanguage = getLanguageFromPath(rawPath) ?? "text";
+		const editIcon = uiTheme.fg("muted", uiTheme.getLangIcon(editLanguage));
+		const editDiffPreview = renderContext?.editDiffPreview;
+		const renderDiffFn = renderContext?.renderDiff ?? ((t: string) => t);
+
+		// Build path display with line number if available
+		let pathDisplay = filePath ? uiTheme.fg("accent", filePath) : uiTheme.fg("toolOutput", uiTheme.format.ellipsis);
+		const firstChangedLine =
+			(editDiffPreview && "firstChangedLine" in editDiffPreview ? editDiffPreview.firstChangedLine : undefined) ||
+			(result.details && !result.isError ? result.details.firstChangedLine : undefined);
+		if (firstChangedLine) {
+			pathDisplay += uiTheme.fg("warning", `:${firstChangedLine}`);
+		}
+
+		let text = `${uiTheme.fg("toolTitle", uiTheme.bold("Edit"))} ${editIcon} ${pathDisplay}`;
+
+		const editLineCount = countLines(args?.newText ?? args?.oldText ?? "");
+		text += `\n${formatMetadataLine(editLineCount, editLanguage, uiTheme)}`;
+
+		if (result.isError) {
+			// Show error from result
+			const errorText = result.content?.find((c) => c.type === "text")?.text ?? "";
+			if (errorText) {
+				text += `\n\n${uiTheme.fg("error", errorText)}`;
+			}
+		} else if (editDiffPreview) {
+			// Use cached diff preview (works both before and after execution)
+			if ("error" in editDiffPreview) {
+				text += `\n\n${uiTheme.fg("error", editDiffPreview.error)}`;
+			} else if (editDiffPreview.diff) {
+				const diffStats = getDiffStats(editDiffPreview.diff);
+				text += `\n${uiTheme.fg("dim", uiTheme.format.bracketLeft)}${formatDiffStats(
+					diffStats.added,
+					diffStats.removed,
+					diffStats.hunks,
+					uiTheme,
+				)}${uiTheme.fg("dim", uiTheme.format.bracketRight)}`;
+
+				const {
+					text: diffText,
+					hiddenHunks,
+					hiddenLines,
+				} = expanded
+					? { text: editDiffPreview.diff, hiddenHunks: 0, hiddenLines: 0 }
+					: truncateDiffByHunk(editDiffPreview.diff, EDIT_DIFF_PREVIEW_HUNKS, EDIT_DIFF_PREVIEW_LINES);
+
+				text += `\n\n${renderDiffFn(diffText, { filePath: rawPath })}`;
+				if (!expanded && (hiddenHunks > 0 || hiddenLines > 0)) {
+					const remainder: string[] = [];
+					if (hiddenHunks > 0) remainder.push(`${hiddenHunks} more hunks`);
+					if (hiddenLines > 0) remainder.push(`${hiddenLines} more lines`);
+					text += uiTheme.fg(
+						"toolOutput",
+						`\n${uiTheme.format.ellipsis} (${remainder.join(", ")}) ${wrapBrackets("Ctrl+O to expand", uiTheme)}`,
+					);
+				}
+			}
+		}
+
+		// Show LSP diagnostics if available
+		if (result.details?.diagnostics) {
+			text += formatDiagnostics(result.details.diagnostics, expanded, uiTheme, (fp) =>
+				uiTheme.getLangIcon(getLanguageFromPath(fp)),
+			);
+		}
+
+		return new Text(text, 0, 0);
+	},
+};

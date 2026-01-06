@@ -550,3 +550,8 @@ function severityToColor(severity: string): "error" | "warning" | "accent" | "di
 			return "dim";
 	}
 }
+
+export const lspToolRenderer = {
+	renderCall,
+	renderResult,
+};

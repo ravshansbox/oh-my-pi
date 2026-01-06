@@ -475,3 +475,8 @@ export function renderResult(
 
 	return new Text(lines.join("\n"), 0, 0);
 }
+
+export const taskToolRenderer = {
+	renderCall,
+	renderResult,
+};

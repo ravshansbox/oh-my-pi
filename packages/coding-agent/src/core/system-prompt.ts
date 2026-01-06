@@ -145,12 +145,20 @@ function generateAntiBashRules(tools: ToolName[]): string | null {
 	if (hasGit) {
 		lines.push("\n### Git Tool — Preferred for Git Operations");
 		lines.push("Use `git` instead of bash git when you need:");
-		lines.push("- **Status/diff/log**: `git { operation: 'status' }`, `git { operation: 'diff' }`, `git { operation: 'log' }`");
-		lines.push("- **Commit workflow**: `git { operation: 'add', paths: [...] }` then `git { operation: 'commit', message: '...' }`");
+		lines.push(
+			"- **Status/diff/log**: `git { operation: 'status' }`, `git { operation: 'diff' }`, `git { operation: 'log' }`",
+		);
+		lines.push(
+			"- **Commit workflow**: `git { operation: 'add', paths: [...] }` then `git { operation: 'commit', message: '...' }`",
+		);
 		lines.push("- **Branching**: `git { operation: 'branch', action: 'create', name: '...' }`");
 		lines.push("- **GitHub PRs**: `git { operation: 'pr', action: 'create', title: '...', body: '...' }`");
-		lines.push("- **GitHub Issues**: `git { operation: 'issue', action: 'list' }` or `{ operation: 'issue', number: 123 }`");
-		lines.push("The git tool provides typed output, safety guards, and a clean API for all git and GitHub operations.\n");
+		lines.push(
+			"- **GitHub Issues**: `git { operation: 'issue', action: 'list' }` or `{ operation: 'issue', number: 123 }`",
+		);
+		lines.push(
+			"The git tool provides typed output, safety guards, and a clean API for all git and GitHub operations.\n",
+		);
 	}
 
 	// Add search-first protocol

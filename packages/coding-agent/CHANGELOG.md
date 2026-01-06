@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `webSearchProvider` setting to override auto-detection priority (Exa > Perplexity > Anthropic)
@@ -22,6 +23,7 @@
 
 ### Changed
 
+- Refactored tool renderers to be co-located with their respective tool implementations for improved code organization
 - Changed web search to try all configured providers in sequence with fallback before reporting errors
 - Changed default Anthropic web search model from `claude-sonnet-4-5-20250514` to `claude-haiku-4-5`
 - Changed read tool to show first 50KB of oversized lines instead of directing users to bash sed

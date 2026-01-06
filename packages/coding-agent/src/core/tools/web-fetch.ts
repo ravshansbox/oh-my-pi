@@ -2486,6 +2486,11 @@ export function renderWebFetchResult(
 	return new Text(text, 0, 0);
 }
 
+export const webFetchToolRenderer = {
+	renderCall: renderWebFetchCall,
+	renderResult: renderWebFetchResult,
+};
+
 type WebFetchParams = { url: string; timeout?: number; raw?: boolean };
 
 /** Web fetch tool as CustomTool (for TUI rendering support) */

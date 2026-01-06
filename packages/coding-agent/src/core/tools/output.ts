@@ -8,9 +8,22 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import type { TextContent } from "@oh-my-pi/pi-ai";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
+import type { Theme } from "../../modes/interactive/theme/theme";
 import outputDescription from "../../prompts/tools/output.md" with { type: "text" };
+import type { RenderResultOptions } from "../custom-tools/types";
 import type { SessionContext } from "./index";
+import {
+	formatCount,
+	formatEmptyMessage,
+	formatExpandHint,
+	formatMeta,
+	formatMoreItems,
+	TRUNCATE_LENGTHS,
+	truncate,
+} from "./render-utils";
 import { getArtifactsDir } from "./task/artifacts";
 
 const outputSchema = Type.Object({
@@ -242,3 +255,116 @@ export function createOutputTool(
 
 /** Default output tool using process.cwd() - for backwards compatibility */
 export const outputTool = createOutputTool(process.cwd());
+
+// =============================================================================
+// TUI Renderer
+// =============================================================================
+
+interface OutputRenderArgs {
+	ids: string[];
+	format?: "raw" | "json" | "stripped";
+	offset?: number;
+	limit?: number;
+}
+
+type OutputEntryItem = OutputToolDetails["outputs"][number];
+
+function formatOutputMeta(entry: OutputEntryItem, uiTheme: Theme): string {
+	const metaParts: string[] = [];
+	if (entry.range) {
+		metaParts.push(`lines ${entry.range.startLine}-${entry.range.endLine} of ${entry.range.totalLines}`);
+	} else {
+		metaParts.push(formatCount("line", entry.lineCount));
+	}
+	metaParts.push(formatBytes(entry.charCount));
+	if (entry.provenance) {
+		metaParts.push(`agent ${entry.provenance.agent}(${entry.provenance.index})`);
+	}
+	return uiTheme.fg("dim", metaParts.join(uiTheme.sep.dot));
+}
+
+export const outputToolRenderer = {
+	renderCall(args: OutputRenderArgs, uiTheme: Theme): Component {
+		const ids = args.ids?.join(", ") ?? "?";
+		const label = uiTheme.fg("toolTitle", uiTheme.bold("Output"));
+		let text = `${label} ${uiTheme.fg("accent", ids)}`;
+
+		const meta: string[] = [];
+		if (args.format && args.format !== "raw") meta.push(`format:${args.format}`);
+		if (args.offset !== undefined) meta.push(`offset:${args.offset}`);
+		if (args.limit !== undefined) meta.push(`limit:${args.limit}`);
+		text += formatMeta(meta, uiTheme);
+
+		return new Text(text, 0, 0);
+	},
+
+	renderResult(
+		result: { content: Array<{ type: string; text?: string }>; details?: OutputToolDetails },
+		{ expanded }: RenderResultOptions,
+		uiTheme: Theme,
+	): Component {
+		const details = result.details;
+
+		if (details?.notFound?.length) {
+			const icon = uiTheme.styledSymbol("status.error", "error");
+			let text = `${icon} ${uiTheme.fg("error", `Error: Not found: ${details.notFound.join(", ")}`)}`;
+			if (details.availableIds?.length) {
+				text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg(
+					"muted",
+					`Available: ${details.availableIds.join(", ")}`,
+				)}`;
+			} else {
+				text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg(
+					"muted",
+					"No outputs available in current session",
+				)}`;
+			}
+			return new Text(text, 0, 0);
+		}
+
+		const outputs = details?.outputs ?? [];
+
+		if (outputs.length === 0) {
+			const textContent = result.content?.find((c) => c.type === "text")?.text;
+			return new Text(formatEmptyMessage(textContent || "No outputs", uiTheme), 0, 0);
+		}
+
+		const icon = uiTheme.styledSymbol("status.success", "success");
+		const summary = `read ${formatCount("output", outputs.length)}`;
+		const previewLimit = expanded ? 3 : 1;
+		const maxOutputs = expanded ? outputs.length : Math.min(outputs.length, 5);
+		const hasMoreOutputs = outputs.length > maxOutputs;
+		const hasMorePreview = outputs.some((o) => (o.previewLines?.length ?? 0) > previewLimit);
+		const expandHint = formatExpandHint(expanded, hasMoreOutputs || hasMorePreview, uiTheme);
+		let text = `${icon} ${uiTheme.fg("dim", summary)}${expandHint}`;
+
+		for (let i = 0; i < maxOutputs; i++) {
+			const o = outputs[i];
+			const isLast = i === maxOutputs - 1 && !hasMoreOutputs;
+			const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
+			text += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("accent", o.id)} ${formatOutputMeta(o, uiTheme)}`;
+
+			const previewLines = o.previewLines ?? [];
+			const shownPreview = previewLines.slice(0, previewLimit);
+			if (shownPreview.length > 0) {
+				const childPrefix = isLast ? "   " : ` ${uiTheme.fg("dim", uiTheme.tree.vertical)} `;
+				for (const line of shownPreview) {
+					const previewText = truncate(line, TRUNCATE_LENGTHS.CONTENT, uiTheme.format.ellipsis);
+					text += `\n${childPrefix}${uiTheme.fg("dim", uiTheme.tree.hook)} ${uiTheme.fg(
+						"muted",
+						"preview:",
+					)} ${uiTheme.fg("toolOutput", previewText)}`;
+				}
+			}
+		}
+
+		if (hasMoreOutputs) {
+			text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg(
+				"muted",
+				formatMoreItems(outputs.length - maxOutputs, "output", uiTheme),
+			)}`;
+		}
+
+		return new Text(text, 0, 0);
+	},
+};

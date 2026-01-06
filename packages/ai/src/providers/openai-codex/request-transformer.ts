@@ -159,10 +159,10 @@ function getReasoningConfig(modelName: string | undefined, options: CodexRequest
 	const defaultEffort: ReasoningConfig["effort"] = isCodexMini
 		? "medium"
 		: supportsXhigh
-			? "high"
-			: isLightweight
-				? "minimal"
-				: "medium";
+		? "high"
+		: isLightweight
+		? "minimal"
+		: "medium";
 
 	let effort = options.reasoningEffort || defaultEffort;
 
@@ -213,7 +213,7 @@ function filterInput(input: InputItem[] | undefined): InputItem[] | undefined {
 function addCodexBridgeMessage(
 	input: InputItem[] | undefined,
 	hasTools: boolean,
-	systemPrompt?: string,
+	systemPrompt?: string
 ): InputItem[] | undefined {
 	if (!hasTools || !Array.isArray(input)) return input;
 
@@ -255,7 +255,7 @@ export async function transformRequestBody(
 	codexInstructions: string,
 	options: CodexRequestOptions = {},
 	codexMode = true,
-	systemPrompt?: string,
+	systemPrompt?: string
 ): Promise<RequestBody> {
 	const normalizedModel = normalizeModel(body.model);
 
@@ -277,7 +277,7 @@ export async function transformRequestBody(
 			const functionCallIds = new Set(
 				body.input
 					.filter((item) => item.type === "function_call" && typeof item.call_id === "string")
-					.map((item) => item.call_id as string),
+					.map((item) => item.call_id as string)
 			);
 
 			body.input = body.input.map((item) => {
@@ -319,7 +319,9 @@ export async function transformRequestBody(
 		verbosity: options.textVerbosity || "medium",
 	};
 
-	body.include = options.include || ["reasoning.encrypted_content"];
+	const include = Array.isArray(options.include) ? [...options.include] : [];
+	include.push("reasoning.encrypted_content");
+	body.include = Array.from(new Set(include));
 
 	delete body.max_output_tokens;
 	delete body.max_completion_tokens;

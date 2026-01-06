@@ -1,7 +1,19 @@
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
+import type { Component } from "@oh-my-pi/pi-tui";
+import { Text } from "@oh-my-pi/pi-tui";
 import { Type } from "@sinclair/typebox";
+import type { Theme } from "../../modes/interactive/theme/theme";
+import type { RenderResultOptions } from "../custom-tools/types";
 import { untilAborted } from "../utils";
 import { resolveToCwd } from "./path-utils";
+import {
+	formatCount,
+	formatErrorMessage,
+	formatExpandHint,
+	formatMeta,
+	formatMoreItems,
+	PREVIEW_LIMITS,
+} from "./render-utils";
 
 const notebookSchema = Type.Object({
 	action: Type.Union([Type.Literal("edit"), Type.Literal("insert"), Type.Literal("delete")], {
@@ -180,3 +192,101 @@ export function createNotebookTool(cwd: string): AgentTool<typeof notebookSchema
 
 /** Default notebook tool using process.cwd() */
 export const notebookTool = createNotebookTool(process.cwd());
+
+// =============================================================================
+// TUI Renderer
+// =============================================================================
+
+interface NotebookRenderArgs {
+	action: string;
+	notebookPath: string;
+	cellNumber?: number;
+	cellType?: string;
+	content?: string;
+}
+
+const COLLAPSED_TEXT_LIMIT = PREVIEW_LIMITS.COLLAPSED_LINES * 2;
+
+function normalizeCellLines(lines: string[]): string[] {
+	return lines.map((line) => (line.endsWith("\n") ? line.slice(0, -1) : line));
+}
+
+function renderCellPreview(lines: string[], expanded: boolean, uiTheme: Theme): string {
+	const normalized = normalizeCellLines(lines);
+	if (normalized.length === 0) {
+		return `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg("muted", "(empty cell)")}`;
+	}
+
+	const maxLines = expanded ? normalized.length : Math.min(normalized.length, COLLAPSED_TEXT_LIMIT);
+	let text = "";
+
+	for (let i = 0; i < maxLines; i++) {
+		const isLast = i === maxLines - 1 && (expanded || normalized.length <= maxLines);
+		const branch = isLast ? uiTheme.tree.last : uiTheme.tree.branch;
+		const line = normalized[i];
+		text += `\n ${uiTheme.fg("dim", branch)} ${uiTheme.fg("toolOutput", line)}`;
+	}
+
+	const remaining = normalized.length - maxLines;
+	if (remaining > 0) {
+		text += `\n ${uiTheme.fg("dim", uiTheme.tree.last)} ${uiTheme.fg(
+			"muted",
+			formatMoreItems(remaining, "line", uiTheme),
+		)}`;
+	}
+
+	return text;
+}
+
+export const notebookToolRenderer = {
+	renderCall(args: NotebookRenderArgs, uiTheme: Theme): Component {
+		const label = uiTheme.fg("toolTitle", uiTheme.bold("Notebook"));
+		let text = `${label} ${uiTheme.fg("accent", args.action || "?")}`;
+
+		const meta: string[] = [];
+		meta.push(`in ${args.notebookPath || "?"}`);
+		if (args.cellNumber !== undefined) meta.push(`cell:${args.cellNumber}`);
+		if (args.cellType) meta.push(`type:${args.cellType}`);
+
+		text += formatMeta(meta, uiTheme);
+
+		return new Text(text, 0, 0);
+	},
+
+	renderResult(
+		result: { content: Array<{ type: string; text?: string }>; details?: NotebookToolDetails },
+		{ expanded }: RenderResultOptions,
+		uiTheme: Theme,
+	): Component {
+		const content = result.content?.[0];
+		if (content?.type === "text" && content.text?.startsWith("Error:")) {
+			return new Text(formatErrorMessage(content.text, uiTheme), 0, 0);
+		}
+
+		const details = result.details;
+		const action = details?.action ?? "edit";
+		const cellIndex = details?.cellIndex;
+		const cellType = details?.cellType;
+		const totalCells = details?.totalCells;
+		const cellSource = details?.cellSource;
+		const lineCount = cellSource?.length;
+		const canExpand = cellSource !== undefined && cellSource.length > COLLAPSED_TEXT_LIMIT;
+
+		const icon = uiTheme.styledSymbol("status.success", "success");
+		const actionLabel = action === "insert" ? "Inserted" : action === "delete" ? "Deleted" : "Edited";
+		const cellLabel = cellType || "cell";
+		const summaryParts = [`${actionLabel} ${cellLabel} at index ${cellIndex ?? "?"}`];
+		if (lineCount !== undefined) summaryParts.push(formatCount("line", lineCount));
+		if (totalCells !== undefined) summaryParts.push(`${totalCells} total`);
+		const summaryText = summaryParts.join(uiTheme.sep.dot);
+
+		const expandHint = formatExpandHint(expanded, canExpand, uiTheme);
+		let text = `${icon} ${uiTheme.fg("dim", summaryText)}${expandHint}`;
+
+		if (cellSource) {
+			text += renderCellPreview(cellSource, expanded, uiTheme);
+		}
+
+		return new Text(text, 0, 0);
+	},
+};

@@ -325,3 +325,8 @@ export function renderWebSearchCall(
 	const text = `${theme.fg("toolTitle", "Web Search")} ${theme.fg("dim", `(${provider})`)} ${theme.fg("muted", query)}`;
 	return new Text(text, 0, 0);
 }
+
+export const webSearchToolRenderer = {
+	renderCall: renderWebSearchCall,
+	renderResult: renderWebSearchResult,
+};

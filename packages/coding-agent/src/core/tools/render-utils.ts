@@ -204,6 +204,247 @@ export function formatMoreItems(remaining: number, itemType: string, theme: Them
 	return `${theme.format.ellipsis} ${safeRemaining} more ${pluralize(itemType, safeRemaining)}`;
 }
 
+export function formatMeta(meta: string[], theme: Theme): string {
+	return meta.length > 0 ? ` ${theme.fg("muted", meta.join(theme.sep.dot))}` : "";
+}
+
+export function formatScope(scopePath: string | undefined, theme: Theme): string {
+	return scopePath ? ` ${theme.fg("muted", `in ${scopePath}`)}` : "";
+}
+
+export function formatTruncationSuffix(truncated: boolean, theme: Theme): string {
+	return truncated ? theme.fg("warning", " (truncated)") : "";
+}
+
+export function formatErrorMessage(message: string | undefined, theme: Theme): string {
+	const clean = (message ?? "").replace(/^Error:\s*/, "").trim();
+	return `${theme.styledSymbol("status.error", "error")} ${theme.fg("error", `Error: ${clean || "Unknown error"}`)}`;
+}
+
+export function formatEmptyMessage(message: string, theme: Theme): string {
+	return `${theme.styledSymbol("status.warning", "warning")} ${theme.fg("muted", message)}`;
+}
+
+// =============================================================================
+// Diagnostic Formatting
+// =============================================================================
+
+interface ParsedDiagnostic {
+	filePath: string;
+	line: number;
+	col: number;
+	severity: "error" | "warning" | "info" | "hint";
+	source?: string;
+	message: string;
+	code?: string;
+}
+
+function parseDiagnosticMessage(msg: string): ParsedDiagnostic | null {
+	const match = msg.match(/^(.+?):(\d+):(\d+)\s+\[(\w+)\]\s+(?:\[([^\]]+)\]\s+)?(.+?)(?:\s+\(([^)]+)\))?$/);
+	if (!match) return null;
+	return {
+		filePath: match[1],
+		line: parseInt(match[2], 10),
+		col: parseInt(match[3], 10),
+		severity: match[4] as ParsedDiagnostic["severity"],
+		source: match[5],
+		message: match[6],
+		code: match[7],
+	};
+}
+
+export function formatDiagnostics(
+	diag: { errored: boolean; summary: string; messages: string[] },
+	expanded: boolean,
+	theme: Theme,
+	getLangIcon: (filePath: string) => string,
+): string {
+	if (diag.messages.length === 0) return "";
+
+	const byFile = new Map<string, ParsedDiagnostic[]>();
+	const unparsed: string[] = [];
+
+	for (const msg of diag.messages) {
+		const parsed = parseDiagnosticMessage(msg);
+		if (parsed) {
+			const existing = byFile.get(parsed.filePath) ?? [];
+			existing.push(parsed);
+			byFile.set(parsed.filePath, existing);
+		} else {
+			unparsed.push(msg);
+		}
+	}
+
+	const headerIcon = diag.errored
+		? theme.styledSymbol("status.error", "error")
+		: theme.styledSymbol("status.warning", "warning");
+	let output = `\n\n${headerIcon} ${theme.fg("toolTitle", "Diagnostics")} ${theme.fg("dim", `(${diag.summary})`)}`;
+
+	const maxDiags = expanded ? diag.messages.length : 5;
+	let shown = 0;
+
+	const files = Array.from(byFile.entries());
+	for (let fi = 0; fi < files.length && shown < maxDiags; fi++) {
+		const [filePath, diagnostics] = files[fi];
+		const isLastFile = fi === files.length - 1 && unparsed.length === 0;
+		const fileBranch = isLastFile ? theme.tree.last : theme.tree.branch;
+
+		const fileIcon = theme.fg("muted", getLangIcon(filePath));
+		output += `\n ${theme.fg("dim", fileBranch)} ${fileIcon} ${theme.fg("accent", filePath)}`;
+		shown++;
+
+		for (let di = 0; di < diagnostics.length && shown < maxDiags; di++) {
+			const d = diagnostics[di];
+			const isLastDiag = di === diagnostics.length - 1;
+			const diagBranch = isLastFile
+				? isLastDiag
+					? `   ${theme.tree.last}`
+					: `   ${theme.tree.branch}`
+				: isLastDiag
+					? ` ${theme.tree.vertical} ${theme.tree.last}`
+					: ` ${theme.tree.vertical} ${theme.tree.branch}`;
+
+			const sevIcon =
+				d.severity === "error"
+					? theme.styledSymbol("status.error", "error")
+					: d.severity === "warning"
+						? theme.styledSymbol("status.warning", "warning")
+						: theme.styledSymbol("status.info", "muted");
+			const location = theme.fg("dim", `:${d.line}:${d.col}`);
+			const codeTag = d.code ? theme.fg("dim", ` (${d.code})`) : "";
+			const msgColor = d.severity === "error" ? "error" : d.severity === "warning" ? "warning" : "toolOutput";
+
+			output += `\n ${theme.fg("dim", diagBranch)} ${sevIcon}${location} ${theme.fg(msgColor, d.message)}${codeTag}`;
+			shown++;
+		}
+	}
+
+	for (const msg of unparsed) {
+		if (shown >= maxDiags) break;
+		const color = msg.includes("[error]") ? "error" : msg.includes("[warning]") ? "warning" : "dim";
+		output += `\n ${theme.fg("dim", theme.tree.branch)} ${theme.fg(color, msg)}`;
+		shown++;
+	}
+
+	if (diag.messages.length > shown) {
+		const remaining = diag.messages.length - shown;
+		output += `\n ${theme.fg("dim", theme.tree.last)} ${theme.fg("muted", `${theme.format.ellipsis} ${remaining} more`)} ${theme.fg("dim", "(Ctrl+O to expand)")}`;
+	}
+
+	return output;
+}
+
+// =============================================================================
+// Diff Utilities
+// =============================================================================
+
+export interface DiffStats {
+	added: number;
+	removed: number;
+	hunks: number;
+	lines: number;
+}
+
+export function getDiffStats(diffText: string): DiffStats {
+	const lines = diffText ? diffText.split("\n") : [];
+	let added = 0;
+	let removed = 0;
+	let hunks = 0;
+	let inHunk = false;
+
+	for (const line of lines) {
+		const isAdded = line.startsWith("+");
+		const isRemoved = line.startsWith("-");
+		const isChange = isAdded || isRemoved;
+
+		if (isAdded) added++;
+		if (isRemoved) removed++;
+
+		if (isChange && !inHunk) {
+			hunks++;
+			inHunk = true;
+		} else if (!isChange) {
+			inHunk = false;
+		}
+	}
+
+	return { added, removed, hunks, lines: lines.length };
+}
+
+export function formatDiffStats(added: number, removed: number, hunks: number, theme: Theme): string {
+	const parts: string[] = [];
+	if (added > 0) parts.push(theme.fg("success", `+${added}`));
+	if (removed > 0) parts.push(theme.fg("error", `-${removed}`));
+	if (hunks > 0) parts.push(theme.fg("dim", `${hunks} hunk${hunks !== 1 ? "s" : ""}`));
+	return parts.join(theme.fg("dim", " / "));
+}
+
+export function truncateDiffByHunk(
+	diffText: string,
+	maxHunks: number,
+	maxLines: number,
+): { text: string; hiddenHunks: number; hiddenLines: number } {
+	const lines = diffText ? diffText.split("\n") : [];
+	const totalStats = getDiffStats(diffText);
+	const kept: string[] = [];
+	let inHunk = false;
+	let currentHunks = 0;
+	let reachedLimit = false;
+
+	for (const line of lines) {
+		const isChange = line.startsWith("+") || line.startsWith("-");
+		if (isChange && !inHunk) {
+			currentHunks++;
+			inHunk = true;
+		}
+		if (!isChange) {
+			inHunk = false;
+		}
+
+		if (currentHunks > maxHunks) {
+			reachedLimit = true;
+			break;
+		}
+
+		kept.push(line);
+		if (kept.length >= maxLines) {
+			reachedLimit = true;
+			break;
+		}
+	}
+
+	if (!reachedLimit) {
+		return { text: diffText, hiddenHunks: 0, hiddenLines: 0 };
+	}
+
+	const keptStats = getDiffStats(kept.join("\n"));
+	return {
+		text: kept.join("\n"),
+		hiddenHunks: Math.max(0, totalStats.hunks - keptStats.hunks),
+		hiddenLines: Math.max(0, totalStats.lines - kept.length),
+	};
+}
+
+// =============================================================================
+// Path Utilities
+// =============================================================================
+
+export function shortenPath(filePath: string, homeDir?: string): string {
+	const home = homeDir ?? process.env.HOME ?? process.env.USERPROFILE;
+	if (home && filePath.startsWith(home)) {
+		return `~${filePath.slice(home.length)}`;
+	}
+	return filePath;
+}
+
+export function wrapBrackets(text: string, theme: Theme): string {
+	return `${theme.format.bracketLeft}${text}${theme.format.bracketRight}`;
+}
+
+export function replaceTabs(text: string): string {
+	return text.replace(/\t/g, "   ");
+}
+
 function pluralize(label: string, count: number): string {
 	if (count === 1) return label;
 	if (/(?:ch|sh|s|x|z)$/i.test(label)) return `${label}es`;
