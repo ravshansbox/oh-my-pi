@@ -4,6 +4,7 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { untilAborted } from "../utils";
 import { resolveToCwd } from "./path-utils";
+import { formatAge } from "./render-utils";
 import { DEFAULT_MAX_BYTES, formatSize, type TruncationResult, truncateHead } from "./truncate";
 
 const lsSchema = Type.Object({
@@ -26,7 +27,7 @@ export function createLsTool(cwd: string): AgentTool<typeof lsSchema> {
 	return {
 		name: "ls",
 		label: "Ls",
-		description: `List directory contents. Returns entries sorted alphabetically, with '/' suffix for directories. Includes dotfiles. Output is truncated to 500 entries or 50KB (whichever is hit first). List structure helps with directory navigation and finding target files.`,
+		description: `List directory contents with modification times. Returns entries sorted alphabetically, with '/' suffix for directories and relative age (e.g., "2d ago", "just now"). Includes dotfiles. Output is truncated to 500 entries or 50KB (whichever is hit first).`,
 		parameters: lsSchema,
 		execute: async (
 			_toolCallId: string,
@@ -73,6 +74,7 @@ export function createLsTool(cwd: string): AgentTool<typeof lsSchema> {
 
 					const fullPath = nodePath.join(dirPath, entry);
 					let suffix = "";
+					let age = "";
 
 					try {
 						const entryStat = statSync(fullPath);
@@ -82,12 +84,17 @@ export function createLsTool(cwd: string): AgentTool<typeof lsSchema> {
 						} else {
 							fileCount += 1;
 						}
+						// Calculate age from mtime
+						const ageSeconds = Math.floor((Date.now() - entryStat.mtimeMs) / 1000);
+						age = formatAge(ageSeconds);
 					} catch {
 						// Skip entries we can't stat
 						continue;
 					}
 
-					results.push(entry + suffix);
+					// Format: "name/ (2d ago)" or "name (just now)"
+					const line = age ? `${entry}${suffix} (${age})` : entry + suffix;
+					results.push(line);
 				}
 
 				if (results.length === 0) {

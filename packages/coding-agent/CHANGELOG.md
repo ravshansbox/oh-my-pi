@@ -8,6 +8,7 @@
 ### Changed
 
 - Changed multi-task display to show task descriptions instead of agent names when available
+- Changed ls tool to show relative modification times (e.g., "2d ago", "just now") for each entry
 
 ## [3.20.0] - 2026-01-06
 ### Added
