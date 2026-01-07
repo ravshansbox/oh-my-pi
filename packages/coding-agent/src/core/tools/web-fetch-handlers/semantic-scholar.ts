@@ -1,0 +1,190 @@
+import type { SpecialHandler } from "./types";
+import { finalizeOutput, formatCount, loadPage } from "./types";
+
+interface SemanticScholarAuthor {
+	name: string;
+	authorId?: string;
+}
+
+interface SemanticScholarPaper {
+	paperId: string;
+	title: string;
+	abstract?: string;
+	authors?: SemanticScholarAuthor[];
+	year?: number;
+	citationCount?: number;
+	referenceCount?: number;
+	fieldsOfStudy?: string[];
+	publicationTypes?: string[];
+	journal?: { name: string; volume?: string; pages?: string };
+	externalIds?: {
+		DOI?: string;
+		ArXiv?: string;
+		PubMed?: string;
+		MAG?: string;
+		CorpusId?: string;
+	};
+	tldr?: { text: string };
+	openAccessPdf?: { url: string };
+}
+
+function extractPaperId(url: string): string | null {
+	const patterns = [
+		/semanticscholar\.org\/paper\/[^/]+\/([a-f0-9]{40})/i,
+		/semanticscholar\.org\/paper\/([a-f0-9]{40})/i,
+		/api\.semanticscholar\.org\/.*\/paper\/([a-f0-9]{40})/i,
+	];
+
+	for (const pattern of patterns) {
+		const match = url.match(pattern);
+		if (match?.[1]) return match[1];
+	}
+
+	return null;
+}
+
+export const handleSemanticScholar: SpecialHandler = async (url: string, timeout: number) => {
+	if (!url.includes("semanticscholar.org")) return null;
+
+	const paperId = extractPaperId(url);
+	if (!paperId) {
+		return {
+			url,
+			finalUrl: url,
+			contentType: "text/plain",
+			method: "semantic-scholar",
+			content: "Failed to extract paper ID from Semantic Scholar URL",
+			fetchedAt: new Date().toISOString(),
+			truncated: false,
+			notes: ["Invalid URL format"],
+		};
+	}
+
+	const fields = [
+		"title",
+		"abstract",
+		"authors",
+		"year",
+		"citationCount",
+		"referenceCount",
+		"fieldsOfStudy",
+		"publicationTypes",
+		"journal",
+		"externalIds",
+		"tldr",
+		"openAccessPdf",
+	].join(",");
+
+	const apiUrl = `https://api.semanticscholar.org/graph/v1/paper/${paperId}?fields=${fields}`;
+
+	const { content, ok, finalUrl } = await loadPage(apiUrl, { timeout });
+
+	if (!ok || !content) {
+		return {
+			url,
+			finalUrl: apiUrl,
+			contentType: "text/plain",
+			method: "semantic-scholar",
+			content: "Failed to fetch paper from Semantic Scholar API",
+			fetchedAt: new Date().toISOString(),
+			truncated: false,
+			notes: ["API request failed"],
+		};
+	}
+
+	let paper: SemanticScholarPaper;
+	try {
+		paper = JSON.parse(content);
+	} catch {
+		return {
+			url,
+			finalUrl: apiUrl,
+			contentType: "text/plain",
+			method: "semantic-scholar",
+			content: "Failed to parse response from Semantic Scholar API",
+			fetchedAt: new Date().toISOString(),
+			truncated: false,
+			notes: ["JSON parse error"],
+		};
+	}
+
+	const sections: string[] = [];
+
+	sections.push(`# ${paper.title || "Untitled"}`);
+	sections.push("");
+
+	if (paper.authors && paper.authors.length > 0) {
+		const authorList = paper.authors.map((a) => a.name).join(", ");
+		sections.push(`**Authors:** ${authorList}`);
+		sections.push("");
+	}
+
+	const metadata: string[] = [];
+	if (paper.year) metadata.push(`Year: ${paper.year}`);
+	if (paper.journal?.name) metadata.push(`Venue: ${paper.journal.name}`);
+	if (paper.citationCount !== undefined) {
+		metadata.push(`Citations: ${formatCount(paper.citationCount)}`);
+	}
+	if (paper.referenceCount !== undefined) {
+		metadata.push(`References: ${formatCount(paper.referenceCount)}`);
+	}
+	if (metadata.length > 0) {
+		sections.push(metadata.join(" • "));
+		sections.push("");
+	}
+
+	if (paper.fieldsOfStudy && paper.fieldsOfStudy.length > 0) {
+		sections.push(`**Fields:** ${paper.fieldsOfStudy.join(", ")}`);
+		sections.push("");
+	}
+
+	if (paper.tldr?.text) {
+		sections.push("## TL;DR");
+		sections.push("");
+		sections.push(paper.tldr.text);
+		sections.push("");
+	}
+
+	if (paper.abstract) {
+		sections.push("## Abstract");
+		sections.push("");
+		sections.push(paper.abstract);
+		sections.push("");
+	}
+
+	const links: string[] = [];
+	if (paper.openAccessPdf?.url) {
+		links.push(`[PDF](${paper.openAccessPdf.url})`);
+	}
+	if (paper.externalIds?.ArXiv) {
+		links.push(`[arXiv](https://arxiv.org/abs/${paper.externalIds.ArXiv})`);
+	}
+	if (paper.externalIds?.DOI) {
+		links.push(`[DOI](https://doi.org/${paper.externalIds.DOI})`);
+	}
+	if (paper.externalIds?.PubMed) {
+		links.push(`[PubMed](https://pubmed.ncbi.nlm.nih.gov/${paper.externalIds.PubMed}/)`);
+	}
+	links.push(`[Semantic Scholar](https://www.semanticscholar.org/paper/${paper.paperId})`);
+
+	if (links.length > 0) {
+		sections.push("## Links");
+		sections.push("");
+		sections.push(links.join(" • "));
+		sections.push("");
+	}
+
+	const fullContent = sections.join("\n");
+	const { content: finalContent, truncated } = finalizeOutput(fullContent);
+
+	return {
+		url,
+		finalUrl,
+		contentType: "text/markdown",
+		method: "semantic-scholar",
+		content: finalContent,
+		fetchedAt: new Date().toISOString(),
+		truncated,
+		notes: [],
+	};
+};

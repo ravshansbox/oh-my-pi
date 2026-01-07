@@ -11,6 +11,7 @@ interface ToolConfig {
 	repo: string; // GitHub repo (e.g., "sharkdp/fd")
 	binaryName: string; // Name of the binary inside the archive
 	tagPrefix: string; // Prefix for tags (e.g., "v" for v1.0.0, "" for 1.0.0)
+	isDirectBinary?: boolean; // If true, asset is a direct binary (not an archive)
 	getAssetName: (version: string, plat: string, architecture: string) => string | null;
 }
 
@@ -93,6 +94,43 @@ const TOOLS: Record<string, ToolConfig> = {
 			return null;
 		},
 	},
+	"yt-dlp": {
+		name: "yt-dlp",
+		repo: "yt-dlp/yt-dlp",
+		binaryName: "yt-dlp",
+		tagPrefix: "",
+		isDirectBinary: true,
+		getAssetName: (_version, plat, architecture) => {
+			if (plat === "darwin") {
+				return "yt-dlp_macos"; // Universal binary
+			} else if (plat === "linux") {
+				return architecture === "arm64" ? "yt-dlp_linux_aarch64" : "yt-dlp_linux";
+			} else if (plat === "win32") {
+				return architecture === "arm64" ? "yt-dlp_arm64.exe" : "yt-dlp.exe";
+			}
+			return null;
+		},
+	},
+};
+
+// Python packages installed via uv/pip
+interface PythonToolConfig {
+	name: string;
+	package: string; // PyPI package name
+	binaryName: string; // CLI command name after install
+}
+
+const PYTHON_TOOLS: Record<string, PythonToolConfig> = {
+	markitdown: {
+		name: "markitdown",
+		package: "markitdown",
+		binaryName: "markitdown",
+	},
+	html2text: {
+		name: "html2text",
+		package: "html2text",
+		binaryName: "html2text",
+	},
 };
 
 // Check if a command exists in PATH
@@ -100,8 +138,16 @@ function commandExists(cmd: string): string | null {
 	return Bun.which(cmd);
 }
 
+export type ToolName = "fd" | "rg" | "sd" | "sg" | "yt-dlp" | "markitdown" | "html2text";
+
 // Get the path to a tool (system-wide or in our tools dir)
-export function getToolPath(tool: "fd" | "rg" | "sd" | "sg"): string | null {
+export function getToolPath(tool: ToolName): string | null {
+	// Check Python tools first
+	const pythonConfig = PYTHON_TOOLS[tool];
+	if (pythonConfig) {
+		return commandExists(pythonConfig.binaryName);
+	}
+
 	const config = TOOLS[tool];
 	if (!config) return null;
 
@@ -156,7 +202,7 @@ async function downloadFile(url: string, dest: string): Promise<void> {
 }
 
 // Download and install a tool
-async function downloadTool(tool: "fd" | "rg" | "sd" | "sg"): Promise<string> {
+async function downloadTool(tool: ToolName): Promise<string> {
 	const config = TOOLS[tool];
 	if (!config) throw new Error(`Unknown tool: ${tool}`);
 
@@ -176,11 +222,20 @@ async function downloadTool(tool: "fd" | "rg" | "sd" | "sg"): Promise<string> {
 	mkdirSync(TOOLS_DIR, { recursive: true });
 
 	const downloadUrl = `https://github.com/${config.repo}/releases/download/${config.tagPrefix}${version}/${assetName}`;
-	const archivePath = join(TOOLS_DIR, assetName);
 	const binaryExt = plat === "win32" ? ".exe" : "";
 	const binaryPath = join(TOOLS_DIR, config.binaryName + binaryExt);
 
-	// Download
+	// Handle direct binary downloads (no archive extraction needed)
+	if (config.isDirectBinary) {
+		await downloadFile(downloadUrl, binaryPath);
+		if (plat !== "win32") {
+			chmodSync(binaryPath, 0o755);
+		}
+		return binaryPath;
+	}
+
+	// Download archive
+	const archivePath = join(TOOLS_DIR, assetName);
 	await downloadFile(downloadUrl, archivePath);
 
 	// Extract
@@ -231,15 +286,62 @@ async function downloadTool(tool: "fd" | "rg" | "sd" | "sg"): Promise<string> {
 	return binaryPath;
 }
 
+// Install a Python package via uv (preferred) or pip
+function installPythonPackage(pkg: string): boolean {
+	// Try uv first (faster, better isolation)
+	const uv = commandExists("uv");
+	if (uv) {
+		const result = Bun.spawnSync([uv, "tool", "install", pkg], {
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		if (result.exitCode === 0) return true;
+	}
+
+	// Fall back to pip
+	const pip = commandExists("pip3") || commandExists("pip");
+	if (pip) {
+		const result = Bun.spawnSync([pip, "install", "--user", pkg], {
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		return result.exitCode === 0;
+	}
+
+	return false;
+}
+
 // Ensure a tool is available, downloading if necessary
 // Returns the path to the tool, or null if unavailable
-export async function ensureTool(
-	tool: "fd" | "rg" | "sd" | "sg",
-	silent: boolean = false,
-): Promise<string | undefined> {
+export async function ensureTool(tool: ToolName, silent: boolean = false): Promise<string | undefined> {
 	const existingPath = getToolPath(tool);
 	if (existingPath) {
 		return existingPath;
+	}
+
+	// Handle Python tools
+	const pythonConfig = PYTHON_TOOLS[tool];
+	if (pythonConfig) {
+		if (!silent) {
+			console.log(chalk.dim(`${pythonConfig.name} not found. Installing via uv/pip...`));
+		}
+		const success = installPythonPackage(pythonConfig.package);
+		if (success) {
+			// Re-check for the command after installation
+			const path = commandExists(pythonConfig.binaryName);
+			if (path) {
+				if (!silent) {
+					console.log(chalk.dim(`${pythonConfig.name} installed successfully`));
+				}
+				return path;
+			}
+		}
+		if (!silent) {
+			console.log(chalk.yellow(`Failed to install ${pythonConfig.name}`));
+		}
+		return undefined;
 	}
 
 	const config = TOOLS[tool];

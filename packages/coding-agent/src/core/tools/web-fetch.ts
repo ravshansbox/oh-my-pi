@@ -4,8 +4,64 @@ import type { AgentTool } from "@oh-my-pi/pi-agent-core";
 import { Type } from "@sinclair/typebox";
 import { parse as parseHtml } from "node-html-parser";
 import webFetchDescription from "../../prompts/tools/web-fetch.md" with { type: "text" };
+import { ensureTool } from "../../utils/tools-manager";
 import { logger } from "../logger";
 import type { ToolSession } from "./index";
+import {
+	handleArtifactHub,
+	handleArxiv,
+	handleAur,
+	handleBiorxiv,
+	handleBluesky,
+	handleBrew,
+	handleCheatSh,
+	handleChocolatey,
+	handleCoinGecko,
+	handleCratesIo,
+	handleDevTo,
+	handleDiscogs,
+	handleDockerHub,
+	handleGitHub,
+	handleGitHubGist,
+	handleGitLab,
+	handleGoPkg,
+	handleHackage,
+	handleHackerNews,
+	handleHex,
+	handleHuggingFace,
+	handleIacr,
+	handleLobsters,
+	handleMastodon,
+	handleMaven,
+	handleMDN,
+	handleMetaCPAN,
+	handleNpm,
+	handleNuGet,
+	handleNvd,
+	handleOpenCorporates,
+	handleOpenLibrary,
+	handleOsv,
+	handlePackagist,
+	handlePubDev,
+	handlePubMed,
+	handlePyPI,
+	handleReadTheDocs,
+	handleReddit,
+	handleRepology,
+	handleRfc,
+	handleRubyGems,
+	handleSecEdgar,
+	handleSemanticScholar,
+	handleSpotify,
+	handleStackOverflow,
+	handleTerraform,
+	handleTldr,
+	handleTwitter,
+	handleVimeo,
+	handleWikidata,
+	handleWikipedia,
+	handleYouTube,
+} from "./web-fetch-handlers/index";
 
 // =============================================================================
 // Types and Constants
@@ -296,7 +352,8 @@ async function convertWithMarkitdown(
 	extensionHint: string,
 	timeout: number,
 ): Promise<{ content: string; ok: boolean }> {
-	if (!hasCommand("markitdown")) {
+	const markitdown = await ensureTool("markitdown", true);
+	if (!markitdown) {
 		return { content: "", ok: false };
 	}
 
@@ -307,7 +364,7 @@ async function convertWithMarkitdown(
 
 	try {
 		await Bun.write(tmpFile, content);
-		const result = exec("markitdown", [tmpFile], { timeout });
+		const result = exec(markitdown, [tmpFile], { timeout });
 		return { content: result.stdout, ok: result.ok };
 	} finally {
 		try {
@@ -522,18 +579,39 @@ function parseFeedToMarkdown(content: string, maxItems = 10): string {
 }
 
 /**
- * Render HTML to text using lynx
+ * Render HTML to text using lynx or html2text fallback
  */
-async function renderWithLynx(html: string, timeout: number): Promise<{ content: string; ok: boolean }> {
+async function renderHtmlToText(
+	html: string,
+	timeout: number,
+): Promise<{ content: string; ok: boolean; method: string }> {
 	const tmpDir = tmpdir();
 	const tmpFile = path.join(tmpDir, `omp-render-${Date.now()}.html`);
+
 	try {
 		await Bun.write(tmpFile, html);
-		// Convert path to file URL (handles Windows paths correctly)
-		const normalizedPath = tmpFile.replace(/\\/g, "/");
-		const fileUrl = normalizedPath.startsWith("/") ? `file://${normalizedPath}` : `file:///${normalizedPath}`;
-		const result = exec("lynx", ["-dump", "-nolist", "-width", "120", fileUrl], { timeout });
-		return { content: result.stdout, ok: result.ok };
+
+		// Try lynx first (can't auto-install, system package)
+		const lynx = hasCommand("lynx");
+		if (lynx) {
+			const normalizedPath = tmpFile.replace(/\\/g, "/");
+			const fileUrl = normalizedPath.startsWith("/") ? `file://${normalizedPath}` : `file:///${normalizedPath}`;
+			const result = exec("lynx", ["-dump", "-nolist", "-width", "120", fileUrl], { timeout });
+			if (result.ok) {
+				return { content: result.stdout, ok: true, method: "lynx" };
+			}
+		}
+
+		// Fall back to html2text (auto-install via uv/pip)
+		const html2text = await ensureTool("html2text", true);
+		if (html2text) {
+			const result = exec(html2text, [tmpFile], { timeout });
+			if (result.ok) {
+				return { content: result.stdout, ok: true, method: "html2text" };
+			}
+		}
+
+		return { content: "", ok: false, method: "none" };
 	} finally {
 		try {
 			await Bun.$`rm ${tmpFile}`.quiet();
@@ -639,1589 +717,6 @@ async function fetchBinary(
 }
 
 // =============================================================================
-// GitHub Special Handling
-// =============================================================================
-
-interface GitHubUrl {
-	type: "blob" | "tree" | "repo" | "issue" | "issues" | "pull" | "pulls" | "discussion" | "discussions" | "other";
-	owner: string;
-	repo: string;
-	ref?: string;
-	path?: string;
-	number?: number;
-}
-
-/**
- * Parse GitHub URL into components
- */
-function parseGitHubUrl(url: string): GitHubUrl | null {
-	try {
-		const parsed = new URL(url);
-		if (parsed.hostname !== "github.com") return null;
-
-		const parts = parsed.pathname.split("/").filter(Boolean);
-		if (parts.length < 2) return null;
-
-		const [owner, repo, ...rest] = parts;
-
-		if (rest.length === 0) {
-			return { type: "repo", owner, repo };
-		}
-
-		const [section, ...subParts] = rest;
-
-		switch (section) {
-			case "blob":
-			case "tree": {
-				const [ref, ...pathParts] = subParts;
-				return { type: section, owner, repo, ref, path: pathParts.join("/") };
-			}
-			case "issues":
-				if (subParts.length > 0 && /^\d+$/.test(subParts[0])) {
-					return { type: "issue", owner, repo, number: parseInt(subParts[0], 10) };
-				}
-				return { type: "issues", owner, repo };
-			case "pull":
-				if (subParts.length > 0 && /^\d+$/.test(subParts[0])) {
-					return { type: "pull", owner, repo, number: parseInt(subParts[0], 10) };
-				}
-				return { type: "pulls", owner, repo };
-			case "pulls":
-				return { type: "pulls", owner, repo };
-			case "discussions":
-				if (subParts.length > 0 && /^\d+$/.test(subParts[0])) {
-					return { type: "discussion", owner, repo, number: parseInt(subParts[0], 10) };
-				}
-				return { type: "discussions", owner, repo };
-			default:
-				return { type: "other", owner, repo };
-		}
-	} catch {
-		return null;
-	}
-}
-
-/**
- * Convert GitHub blob URL to raw URL
- */
-function toRawGitHubUrl(gh: GitHubUrl): string {
-	return `https://raw.githubusercontent.com/${gh.owner}/${gh.repo}/refs/heads/${gh.ref}/${gh.path}`;
-}
-
-/**
- * Fetch from GitHub API
- */
-async function fetchGitHubApi(endpoint: string, timeout: number): Promise<{ data: unknown; ok: boolean }> {
-	try {
-		const controller = new AbortController();
-		const timeoutId = setTimeout(() => controller.abort(), timeout * 1000);
-
-		const headers: Record<string, string> = {
-			Accept: "application/vnd.github.v3+json",
-			"User-Agent": "omp-web-fetch/1.0",
-		};
-
-		// Use GITHUB_TOKEN if available
-		const token = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
-		if (token) {
-			headers.Authorization = `Bearer ${token}`;
-		}
-
-		const response = await fetch(`https://api.github.com${endpoint}`, {
-			signal: controller.signal,
-			headers,
-		});
-
-		clearTimeout(timeoutId);
-
-		if (!response.ok) {
-			return { data: null, ok: false };
-		}
-
-		return { data: await response.json(), ok: true };
-	} catch {
-		return { data: null, ok: false };
-	}
-}
-
-/**
- * Render GitHub issue/PR to markdown
- */
-async function renderGitHubIssue(gh: GitHubUrl, timeout: number): Promise<{ content: string; ok: boolean }> {
-	const endpoint =
-		gh.type === "pull"
-			? `/repos/${gh.owner}/${gh.repo}/pulls/${gh.number}`
-			: `/repos/${gh.owner}/${gh.repo}/issues/${gh.number}`;
-
-	const result = await fetchGitHubApi(endpoint, timeout);
-	if (!result.ok || !result.data) return { content: "", ok: false };
-
-	const issue = result.data as {
-		title: string;
-		number: number;
-		state: string;
-		user: { login: string };
-		created_at: string;
-		updated_at: string;
-		body: string | null;
-		labels: Array<{ name: string }>;
-		comments: number;
-		html_url: string;
-	};
-
-	let md = `# ${issue.title}\n\n`;
-	md += `**#${issue.number}** · ${issue.state} · opened by @${issue.user.login}\n`;
-	md += `Created: ${issue.created_at} · Updated: ${issue.updated_at}\n`;
-	if (issue.labels.length > 0) {
-		md += `Labels: ${issue.labels.map((l) => l.name).join(", ")}\n`;
-	}
-	md += `\n---\n\n`;
-	md += issue.body || "*No description provided.*";
-	md += `\n\n---\n\n`;
-
-	// Fetch comments if any
-	if (issue.comments > 0) {
-		const commentsResult = await fetchGitHubApi(
-			`/repos/${gh.owner}/${gh.repo}/issues/${gh.number}/comments?per_page=50`,
-			timeout,
-		);
-		if (commentsResult.ok && Array.isArray(commentsResult.data)) {
-			md += `## Comments (${issue.comments})\n\n`;
-			for (const comment of commentsResult.data as Array<{
-				user: { login: string };
-				created_at: string;
-				body: string;
-			}>) {
-				md += `### @${comment.user.login} · ${comment.created_at}\n\n`;
-				md += `${comment.body}\n\n---\n\n`;
-			}
-		}
-	}
-
-	return { content: md, ok: true };
-}
-
-/**
- * Render GitHub issues list to markdown
- */
-async function renderGitHubIssuesList(gh: GitHubUrl, timeout: number): Promise<{ content: string; ok: boolean }> {
-	const result = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/issues?state=open&per_page=30`, timeout);
-	if (!result.ok || !Array.isArray(result.data)) return { content: "", ok: false };
-
-	const issues = result.data as Array<{
-		number: number;
-		title: string;
-		state: string;
-		user: { login: string };
-		created_at: string;
-		comments: number;
-		labels: Array<{ name: string }>;
-		pull_request?: unknown;
-	}>;
-
-	let md = `# ${gh.owner}/${gh.repo} - Open Issues\n\n`;
-
-	for (const issue of issues) {
-		if (issue.pull_request) continue; // Skip PRs in issues list
-		const labels = issue.labels.length > 0 ? ` [${issue.labels.map((l) => l.name).join(", ")}]` : "";
-		md += `- **#${issue.number}** ${issue.title}${labels}\n`;
-		md += `  by @${issue.user.login} · ${issue.comments} comments · ${issue.created_at}\n\n`;
-	}
-
-	return { content: md, ok: true };
-}
-
-/**
- * Render GitHub tree (directory) to markdown
- */
-async function renderGitHubTree(gh: GitHubUrl, timeout: number): Promise<{ content: string; ok: boolean }> {
-	// Fetch repo info first to get default branch if ref not specified
-	const repoResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}`, timeout);
-	if (!repoResult.ok) return { content: "", ok: false };
-
-	const repo = repoResult.data as {
-		full_name: string;
-		default_branch: string;
-	};
-
-	const ref = gh.ref || repo.default_branch;
-	const dirPath = gh.path || "";
-
-	let md = `# ${repo.full_name}/${dirPath || "(root)"}\n\n`;
-	md += `**Branch:** ${ref}\n\n`;
-
-	// Fetch directory contents
-	const contentsResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/contents/${dirPath}?ref=${ref}`, timeout);
-
-	if (contentsResult.ok && Array.isArray(contentsResult.data)) {
-		const items = contentsResult.data as Array<{
-			name: string;
-			type: "file" | "dir" | "symlink" | "submodule";
-			size?: number;
-			path: string;
-		}>;
-
-		// Sort: directories first, then files, alphabetically
-		items.sort((a, b) => {
-			if (a.type === "dir" && b.type !== "dir") return -1;
-			if (a.type !== "dir" && b.type === "dir") return 1;
-			return a.name.localeCompare(b.name);
-		});
-
-		md += `## Contents\n\n`;
-		md += "```\n";
-		for (const item of items) {
-			const prefix = item.type === "dir" ? "[dir] " : "      ";
-			const size = item.size ? ` (${item.size} bytes)` : "";
-			md += `${prefix}${item.name}${item.type === "file" ? size : ""}\n`;
-		}
-		md += "```\n\n";
-
-		// Look for README in this directory
-		const readmeFile = items.find((item) => item.type === "file" && /^readme\.md$/i.test(item.name));
-		if (readmeFile) {
-			const readmePath = dirPath ? `${dirPath}/${readmeFile.name}` : readmeFile.name;
-			const rawUrl = `https://raw.githubusercontent.com/${gh.owner}/${gh.repo}/refs/heads/${ref}/${readmePath}`;
-			const readmeResult = await loadPage(rawUrl, { timeout });
-			if (readmeResult.ok) {
-				md += `---\n\n## README\n\n${readmeResult.content}`;
-			}
-		}
-	}
-
-	return { content: md, ok: true };
-}
-
-/**
- * Render GitHub repo to markdown (file list + README)
- */
-async function renderGitHubRepo(gh: GitHubUrl, timeout: number): Promise<{ content: string; ok: boolean }> {
-	// Fetch repo info
-	const repoResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}`, timeout);
-	if (!repoResult.ok) return { content: "", ok: false };
-
-	const repo = repoResult.data as {
-		full_name: string;
-		description: string | null;
-		stargazers_count: number;
-		forks_count: number;
-		open_issues_count: number;
-		default_branch: string;
-		language: string | null;
-		license: { name: string } | null;
-	};
-
-	let md = `# ${repo.full_name}\n\n`;
-	if (repo.description) md += `${repo.description}\n\n`;
-	md += `Stars: ${repo.stargazers_count} · Forks: ${repo.forks_count} · Issues: ${repo.open_issues_count}\n`;
-	if (repo.language) md += `Language: ${repo.language}\n`;
-	if (repo.license) md += `License: ${repo.license.name}\n`;
-	md += `\n---\n\n`;
-
-	// Fetch file tree
-	const treeResult = await fetchGitHubApi(
-		`/repos/${gh.owner}/${gh.repo}/git/trees/${repo.default_branch}?recursive=1`,
-		timeout,
-	);
-	if (treeResult.ok && treeResult.data) {
-		const tree = (treeResult.data as { tree: Array<{ path: string; type: string }> }).tree;
-		md += `## Files\n\n`;
-		md += "```\n";
-		for (const item of tree.slice(0, 100)) {
-			const prefix = item.type === "tree" ? "[dir] " : "      ";
-			md += `${prefix}${item.path}\n`;
-		}
-		if (tree.length > 100) {
-			md += `... and ${tree.length - 100} more files\n`;
-		}
-		md += "```\n\n";
-	}
-
-	// Fetch README
-	const readmeResult = await fetchGitHubApi(`/repos/${gh.owner}/${gh.repo}/readme`, timeout);
-	if (readmeResult.ok && readmeResult.data) {
-		const readme = readmeResult.data as { content: string; encoding: string };
-		if (readme.encoding === "base64") {
-			const decoded = Buffer.from(readme.content, "base64").toString("utf-8");
-			md += `## README\n\n${decoded}`;
-		}
-	}
-
-	return { content: md, ok: true };
-}
-
-/**
- * Handle GitHub URLs specially
- */
-async function handleGitHub(url: string, timeout: number): Promise<RenderResult | null> {
-	const gh = parseGitHubUrl(url);
-	if (!gh) return null;
-
-	const fetchedAt = new Date().toISOString();
-	const notes: string[] = [];
-
-	switch (gh.type) {
-		case "blob": {
-			// Convert to raw URL and fetch
-			const rawUrl = toRawGitHubUrl(gh);
-			notes.push(`Fetched raw: ${rawUrl}`);
-			const result = await loadPage(rawUrl, { timeout });
-			if (result.ok) {
-				const output = finalizeOutput(result.content);
-				return {
-					url,
-					finalUrl: rawUrl,
-					contentType: "text/plain",
-					method: "github-raw",
-					content: output.content,
-					fetchedAt,
-					truncated: output.truncated,
-					notes,
-				};
-			}
-			break;
-		}
-
-		case "tree": {
-			notes.push(`Fetched via GitHub API`);
-			const result = await renderGitHubTree(gh, timeout);
-			if (result.ok) {
-				const output = finalizeOutput(result.content);
-				return {
-					url,
-					finalUrl: url,
-					contentType: "text/markdown",
-					method: "github-tree",
-					content: output.content,
-					fetchedAt,
-					truncated: output.truncated,
-					notes,
-				};
-			}
-			break;
-		}
-
-		case "issue":
-		case "pull": {
-			notes.push(`Fetched via GitHub API`);
-			const result = await renderGitHubIssue(gh, timeout);
-			if (result.ok) {
-				const output = finalizeOutput(result.content);
-				return {
-					url,
-					finalUrl: url,
-					contentType: "text/markdown",
-					method: gh.type === "pull" ? "github-pr" : "github-issue",
-					content: output.content,
-					fetchedAt,
-					truncated: output.truncated,
-					notes,
-				};
-			}
-			break;
-		}
-
-		case "issues": {
-			notes.push(`Fetched via GitHub API`);
-			const result = await renderGitHubIssuesList(gh, timeout);
-			if (result.ok) {
-				const output = finalizeOutput(result.content);
-				return {
-					url,
-					finalUrl: url,
-					contentType: "text/markdown",
-					method: "github-issues",
-					content: output.content,
-					fetchedAt,
-					truncated: output.truncated,
-					notes,
-				};
-			}
-			break;
-		}
-
-		case "repo": {
-			notes.push(`Fetched via GitHub API`);
-			const result = await renderGitHubRepo(gh, timeout);
-			if (result.ok) {
-				const output = finalizeOutput(result.content);
-				return {
-					url,
-					finalUrl: url,
-					contentType: "text/markdown",
-					method: "github-repo",
-					content: output.content,
-					fetchedAt,
-					truncated: output.truncated,
-					notes,
-				};
-			}
-			break;
-		}
-	}
-
-	// Fall back to null (let normal rendering handle it)
-	return null;
-}
-
-// =============================================================================
-// Twitter/X Special Handling (via Nitter)
-// =============================================================================
-
-// Active Nitter instances - check https://status.d420.de/instances for current status
-const NITTER_INSTANCES = [
-	"nitter.privacyredirect.com",
-	"nitter.tiekoetter.com",
-	"nitter.poast.org",
-	"nitter.woodland.cafe",
-];
-
-/**
- * Handle Twitter/X URLs via Nitter
- */
-async function handleTwitter(url: string, timeout: number): Promise<RenderResult | null> {
-	try {
-		const parsed = new URL(url);
-		if (!["twitter.com", "x.com", "www.twitter.com", "www.x.com"].includes(parsed.hostname)) {
-			return null;
-		}
-
-		const fetchedAt = new Date().toISOString();
-
-		// Try Nitter instances
-		for (const instance of NITTER_INSTANCES) {
-			const nitterUrl = `https://${instance}${parsed.pathname}`;
-			const result = await loadPage(nitterUrl, { timeout: Math.min(timeout, 10) });
-
-			if (result.ok && result.content.length > 500) {
-				// Parse the Nitter HTML
-				const doc = parseHtml(result.content);
-
-				// Extract tweet content
-				const tweetContent = doc.querySelector(".tweet-content")?.text?.trim();
-				const fullname = doc.querySelector(".fullname")?.text?.trim();
-				const username = doc.querySelector(".username")?.text?.trim();
-				const date = doc.querySelector(".tweet-date a")?.text?.trim();
-				const stats = doc.querySelector(".tweet-stats")?.text?.trim();
-
-				if (tweetContent) {
-					let md = `# Tweet by ${fullname || "Unknown"} (${username || "@?"})\n\n`;
-					if (date) md += `*${date}*\n\n`;
-					md += `${tweetContent}\n\n`;
-					if (stats) md += `---\n${stats.replace(/\s+/g, " ")}\n`;
-
-					// Check for replies/thread
-					const replies = doc.querySelectorAll(".timeline-item .tweet-content");
-					if (replies.length > 1) {
-						md += `\n---\n\n## Thread/Replies\n\n`;
-						for (const reply of Array.from(replies).slice(1, 10)) {
-							const replyUser = reply.parentNode?.querySelector(".username")?.text?.trim();
-							md += `**${replyUser || "@?"}**: ${reply.text?.trim()}\n\n`;
-						}
-					}
-
-					const output = finalizeOutput(md);
-					return {
-						url,
-						finalUrl: nitterUrl,
-						contentType: "text/markdown",
-						method: "twitter-nitter",
-						content: output.content,
-						fetchedAt,
-						truncated: output.truncated,
-						notes: [`Via Nitter: ${instance}`],
-					};
-				}
-			}
-		}
-	} catch {}
-
-	// X.com blocks all bots - return a helpful error instead of falling through
-	return {
-		url,
-		finalUrl: url,
-		contentType: "text/plain",
-		method: "twitter-blocked",
-		content:
-			"Twitter/X blocks automated access. Nitter instances were unavailable.\n\nTry:\n- Opening the link in a browser\n- Using a different Nitter instance manually\n- Checking if the tweet is available via an archive service",
-		fetchedAt: new Date().toISOString(),
-		truncated: false,
-		notes: ["X.com blocks bots; Nitter instances unavailable"],
-	};
-}
-
-// =============================================================================
-// Stack Overflow Special Handling
-// =============================================================================
-
-interface SOQuestion {
-	title: string;
-	body: string;
-	score: number;
-	owner: { display_name: string };
-	creation_date: number;
-	tags: string[];
-	answer_count: number;
-	is_answered: boolean;
-}
-
-interface SOAnswer {
-	body: string;
-	score: number;
-	is_accepted: boolean;
-	owner: { display_name: string };
-	creation_date: number;
-}
-
-/**
- * Convert basic HTML to markdown (for SO bodies)
- */
-function htmlToBasicMarkdown(html: string): string {
-	return html
-		.replace(/<pre><code[^>]*>/g, "\n```\n")
-		.replace(/<\/code><\/pre>/g, "\n```\n")
-		.replace(/<code>/g, "`")
-		.replace(/<\/code>/g, "`")
-		.replace(/<strong>/g, "**")
-		.replace(/<\/strong>/g, "**")
-		.replace(/<em>/g, "*")
-		.replace(/<\/em>/g, "*")
-		.replace(/<a href="([^"]+)"[^>]*>([^<]+)<\/a>/g, "[$2]($1)")
-		.replace(/<p>/g, "\n\n")
-		.replace(/<\/p>/g, "")
-		.replace(/<br\s*\/?>/g, "\n")
-		.replace(/<li>/g, "- ")
-		.replace(/<\/li>/g, "\n")
-		.replace(/<\/?[uo]l>/g, "\n")
-		.replace(/<h(\d)>/g, (_, n) => `\n${"#".repeat(parseInt(n, 10))} `)
-		.replace(/<\/h\d>/g, "\n")
-		.replace(/<blockquote>/g, "\n> ")
-		.replace(/<\/blockquote>/g, "\n")
-		.replace(/<[^>]+>/g, "") // Strip remaining tags
-		.replace(/&lt;/g, "<")
-		.replace(/&gt;/g, ">")
-		.replace(/&amp;/g, "&")
-		.replace(/&quot;/g, '"')
-		.replace(/&#39;/g, "'")
-		.replace(/\n{3,}/g, "\n\n")
-		.trim();
-}
-
-/**
- * Handle Stack Overflow URLs via API
- */
-async function handleStackOverflow(url: string, timeout: number): Promise<RenderResult | null> {
-	try {
-		const parsed = new URL(url);
-		if (!parsed.hostname.includes("stackoverflow.com") && !parsed.hostname.includes("stackexchange.com")) {
-			return null;
-		}
-
-		// Extract question ID from URL patterns like /questions/12345/...
-		const match = parsed.pathname.match(/\/questions\/(\d+)/);
-		if (!match) return null;
-
-		const questionId = match[1];
-		const site = parsed.hostname.includes("stackoverflow") ? "stackoverflow" : parsed.hostname.split(".")[0];
-		const fetchedAt = new Date().toISOString();
-
-		// Fetch question with answers
-		const apiUrl = `https://api.stackexchange.com/2.3/questions/${questionId}?order=desc&sort=votes&site=${site}&filter=withbody`;
-		const qResult = await loadPage(apiUrl, { timeout });
-
-		if (!qResult.ok) return null;
-
-		const qData = JSON.parse(qResult.content) as { items: SOQuestion[] };
-		if (!qData.items?.length) return null;
-
-		const question = qData.items[0];
-
-		let md = `# ${question.title}\n\n`;
-		md += `**Score:** ${question.score} · **Answers:** ${question.answer_count}`;
-		md += question.is_answered ? " (Answered)" : "";
-		md += `\n**Tags:** ${question.tags.join(", ")}\n`;
-		md += `**Asked by:** ${question.owner.display_name} · ${new Date(question.creation_date * 1000).toISOString().split("T")[0]}\n\n`;
-		md += `---\n\n## Question\n\n${htmlToBasicMarkdown(question.body)}\n\n`;
-
-		// Fetch answers
-		const aUrl = `https://api.stackexchange.com/2.3/questions/${questionId}/answers?order=desc&sort=votes&site=${site}&filter=withbody`;
-		const aResult = await loadPage(aUrl, { timeout });
-
-		if (aResult.ok) {
-			const aData = JSON.parse(aResult.content) as { items: SOAnswer[] };
-			if (aData.items?.length) {
-				md += `---\n\n## Answers\n\n`;
-				for (const answer of aData.items.slice(0, 5)) {
-					const accepted = answer.is_accepted ? " (Accepted)" : "";
-					md += `### Score: ${answer.score}${accepted} · by ${answer.owner.display_name}\n\n`;
-					md += `${htmlToBasicMarkdown(answer.body)}\n\n---\n\n`;
-				}
-			}
-		}
-
-		const output = finalizeOutput(md);
-		return {
-			url,
-			finalUrl: url,
-			contentType: "text/markdown",
-			method: "stackoverflow",
-			content: output.content,
-			fetchedAt,
-			truncated: output.truncated,
-			notes: ["Fetched via Stack Exchange API"],
-		};
-	} catch {}
-
-	return null;
-}
-
-// =============================================================================
-// Wikipedia Special Handling
-// =============================================================================
-
-/**
- * Handle Wikipedia URLs via API
- */
-async function handleWikipedia(url: string, timeout: number): Promise<RenderResult | null> {
-	try {
-		const parsed = new URL(url);
-		// Match *.wikipedia.org
-		const wikiMatch = parsed.hostname.match(/^(\w+)\.wikipedia\.org$/);
-		if (!wikiMatch) return null;
-
-		const lang = wikiMatch[1];
-		const titleMatch = parsed.pathname.match(/\/wiki\/(.+)/);
-		if (!titleMatch) return null;
-
-		const title = decodeURIComponent(titleMatch[1]);
-		const fetchedAt = new Date().toISOString();
-
-		// Use Wikipedia API to get plain text extract
-		const apiUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(title)}`;
-		const summaryResult = await loadPage(apiUrl, { timeout });
-
-		let md = "";
-
-		if (summaryResult.ok) {
-			const summary = JSON.parse(summaryResult.content) as {
-				title: string;
-				description?: string;
-				extract: string;
-			};
-			md = `# ${summary.title}\n\n`;
-			if (summary.description) md += `*${summary.description}*\n\n`;
-			md += `${summary.extract}\n\n---\n\n`;
-		}
-
-		// Get full article content via mobile-html or parse API
-		const contentUrl = `https://${lang}.wikipedia.org/api/rest_v1/page/mobile-html/${encodeURIComponent(title)}`;
-		const contentResult = await loadPage(contentUrl, { timeout });
-
-		if (contentResult.ok) {
-			const doc = parseHtml(contentResult.content);
-
-			// Extract main content sections
-			const sections = doc.querySelectorAll("section");
-			for (const section of sections) {
-				const heading = section.querySelector("h2, h3, h4");
-				const headingText = heading?.text?.trim();
-
-				// Skip certain sections
-				if (
-					headingText &&
-					["References", "External links", "See also", "Notes", "Further reading"].includes(headingText)
-				) {
-					continue;
-				}
-
-				if (headingText) {
-					const level = heading?.tagName === "H2" ? "##" : "###";
-					md += `${level} ${headingText}\n\n`;
-				}
-
-				const paragraphs = section.querySelectorAll("p");
-				for (const p of paragraphs) {
-					const text = p.text?.trim();
-					if (text && text.length > 20) {
-						md += `${text}\n\n`;
-					}
-				}
-			}
-		}
-
-		if (!md) return null;
-
-		const output = finalizeOutput(md);
-		return {
-			url,
-			finalUrl: url,
-			contentType: "text/markdown",
-			method: "wikipedia",
-			content: output.content,
-			fetchedAt,
-			truncated: output.truncated,
-			notes: ["Fetched via Wikipedia API"],
-		};
-	} catch {}
-
-	return null;
-}
-
-// =============================================================================
-// Reddit Special Handling
-// =============================================================================
-
-interface RedditPost {
-	title: string;
-	selftext: string;
-	author: string;
-	score: number;
-	num_comments: number;
-	created_utc: number;
-	subreddit: string;
-	url: string;
-	is_self: boolean;
-}
-
-interface RedditComment {
-	body: string;
-	author: string;
-	score: number;
-	created_utc: number;
-	replies?: { data: { children: Array<{ data: RedditComment }> } };
-}
-
-/**
- * Handle Reddit URLs via JSON API
- */
-async function handleReddit(url: string, timeout: number): Promise<RenderResult | null> {
-	try {
-		const parsed = new URL(url);
-		if (!parsed.hostname.includes("reddit.com")) return null;
-
-		const fetchedAt = new Date().toISOString();
-
-		// Append .json to get JSON response
-		let jsonUrl = `${url.replace(/\/$/, "")}.json`;
-		if (parsed.search) {
-			jsonUrl = `${url.replace(/\/$/, "").replace(parsed.search, "")}.json${parsed.search}`;
-		}
-
-		const result = await loadPage(jsonUrl, { timeout });
-		if (!result.ok) return null;
-
-		const data = JSON.parse(result.content);
-		let md = "";
-
-		// Handle different Reddit URL types
-		if (Array.isArray(data) && data.length >= 1) {
-			// Post page (with comments)
-			const postData = data[0]?.data?.children?.[0]?.data as RedditPost | undefined;
-			if (postData) {
-				md = `# ${postData.title}\n\n`;
-				md += `**r/${postData.subreddit}** · u/${postData.author} · ${postData.score} points · ${postData.num_comments} comments\n`;
-				md += `*${new Date(postData.created_utc * 1000).toISOString().split("T")[0]}*\n\n`;
-
-				if (postData.is_self && postData.selftext) {
-					md += `---\n\n${postData.selftext}\n\n`;
-				} else if (!postData.is_self) {
-					md += `**Link:** ${postData.url}\n\n`;
-				}
-
-				// Add comments if available
-				if (data.length >= 2 && data[1]?.data?.children) {
-					md += `---\n\n## Top Comments\n\n`;
-					const comments = data[1].data.children.filter((c: { kind: string }) => c.kind === "t1").slice(0, 10);
-
-					for (const { data: comment } of comments as Array<{ data: RedditComment }>) {
-						md += `### u/${comment.author} · ${comment.score} points\n\n`;
-						md += `${comment.body}\n\n---\n\n`;
-					}
-				}
-			}
-		} else if (data?.data?.children) {
-			// Subreddit or listing page
-			const posts = data.data.children.slice(0, 20) as Array<{ data: RedditPost }>;
-			const subreddit = posts[0]?.data?.subreddit;
-
-			md = `# r/${subreddit || "Reddit"}\n\n`;
-			for (const { data: post } of posts) {
-				md += `- **${post.title}** (${post.score} pts, ${post.num_comments} comments)\n`;
-				md += `  by u/${post.author}\n\n`;
-			}
-		}
-
-		if (!md) return null;
-
-		const output = finalizeOutput(md);
-		return {
-			url,
-			finalUrl: url,
-			contentType: "text/markdown",
-			method: "reddit",
-			content: output.content,
-			fetchedAt,
-			truncated: output.truncated,
-			notes: ["Fetched via Reddit JSON API"],
-		};
-	} catch {}
-
-	return null;
-}
-
-// =============================================================================
-// NPM Special Handling
-// =============================================================================
-
-/**
- * Handle NPM URLs via registry API
- */
-async function handleNpm(url: string, timeout: number): Promise<RenderResult | null> {
-	try {
-		const parsed = new URL(url);
-		if (parsed.hostname !== "www.npmjs.com" && parsed.hostname !== "npmjs.com") return null;
-
-		// Extract package name from /package/[scope/]name
-		const match = parsed.pathname.match(/^\/package\/(.+?)(?:\/|$)/);
-		if (!match) return null;
-
-		let packageName = decodeURIComponent(match[1]);
-		// Handle scoped packages: /package/@scope/name
-		if (packageName.startsWith("@")) {
-			const scopeMatch = parsed.pathname.match(/^\/package\/(@[^/]+\/[^/]+)/);
-			if (scopeMatch) packageName = decodeURIComponent(scopeMatch[1]);
-		}
-
-		const fetchedAt = new Date().toISOString();
-
-		// Fetch from npm registry - use /latest endpoint for smaller response
-		const latestUrl = `https://registry.npmjs.org/${packageName}/latest`;
-		const downloadsUrl = `https://api.npmjs.org/downloads/point/last-week/${encodeURIComponent(packageName)}`;
-
-		// Fetch package info and download stats in parallel
-		const [result, downloadsResult] = await Promise.all([
-			loadPage(latestUrl, { timeout }),
-			loadPage(downloadsUrl, { timeout: Math.min(timeout, 5) }),
-		]);
-
-		if (!result.ok) return null;
-
-		// Parse download stats
-		let weeklyDownloads: number | null = null;
-		if (downloadsResult.ok) {
-			try {
-				const dlData = JSON.parse(downloadsResult.content) as { downloads?: number };
-				weeklyDownloads = dlData.downloads ?? null;
-			} catch {}
-		}
-
-		let pkg: {
-			name: string;
-			version: string;
-			description?: string;
-			license?: string;
-			homepage?: string;
-			repository?: { url: string } | string;
-			keywords?: string[];
-			maintainers?: Array<{ name: string }>;
-			dependencies?: Record<string, string>;
-			readme?: string;
-		};
-
-		try {
-			pkg = JSON.parse(result.content);
-		} catch {
-			return null; // JSON parse failed (truncated response)
-		}
-
-		let md = `# ${pkg.name}\n\n`;
-		if (pkg.description) md += `${pkg.description}\n\n`;
-
-		md += `**Latest:** ${pkg.version || "unknown"}`;
-		if (pkg.license) md += ` · **License:** ${typeof pkg.license === "string" ? pkg.license : pkg.license}`;
-		md += "\n";
-		if (weeklyDownloads !== null) {
-			const formatted =
-				weeklyDownloads >= 1_000_000
-					? `${(weeklyDownloads / 1_000_000).toFixed(1)}M`
-					: weeklyDownloads >= 1_000
-						? `${(weeklyDownloads / 1_000).toFixed(1)}K`
-						: String(weeklyDownloads);
-			md += `**Weekly Downloads:** ${formatted}\n`;
-		}
-		md += "\n";
-
-		if (pkg.homepage) md += `**Homepage:** ${pkg.homepage}\n`;
-		const repoUrl = typeof pkg.repository === "string" ? pkg.repository : pkg.repository?.url;
-		if (repoUrl) md += `**Repository:** ${repoUrl.replace(/^git\+/, "").replace(/\.git$/, "")}\n`;
-		if (pkg.keywords?.length) md += `**Keywords:** ${pkg.keywords.join(", ")}\n`;
-		if (pkg.maintainers?.length) md += `**Maintainers:** ${pkg.maintainers.map((m) => m.name).join(", ")}\n`;
-
-		if (pkg.dependencies && Object.keys(pkg.dependencies).length > 0) {
-			md += `\n## Dependencies\n\n`;
-			for (const [dep, version] of Object.entries(pkg.dependencies)) {
-				md += `- ${dep}: ${version}\n`;
-			}
-		}
-
-		if (pkg.readme) {
-			md += `\n---\n\n## README\n\n${pkg.readme}\n`;
-		}
-
-		const output = finalizeOutput(md);
-		return {
-			url,
-			finalUrl: url,
-			contentType: "text/markdown",
-			method: "npm",
-			content: output.content,
-			fetchedAt,
-			truncated: output.truncated,
-			notes: ["Fetched via npm registry"],
-		};
-	} catch {}
-
-	return null;
-}
-
-// =============================================================================
-// Crates.io Special Handling
-// =============================================================================
-
-/**
- * Handle crates.io URLs via API
- */
-async function handleCratesIo(url: string, timeout: number): Promise<RenderResult | null> {
-	try {
-		const parsed = new URL(url);
-		if (parsed.hostname !== "crates.io" && parsed.hostname !== "www.crates.io") return null;
-
-		// Extract crate name from /crates/name or /crates/name/version
-		const match = parsed.pathname.match(/^\/crates\/([^/]+)/);
-		if (!match) return null;
-
-		const crateName = decodeURIComponent(match[1]);
-		const fetchedAt = new Date().toISOString();
-
-		// Fetch from crates.io API
-		const apiUrl = `https://crates.io/api/v1/crates/${crateName}`;
-		const result = await loadPage(apiUrl, {
-			timeout,
-			headers: { "User-Agent": "omp-web-fetch/1.0 (https://github.com/anthropics)" },
-		});
-
-		if (!result.ok) return null;
-
-		let data: {
-			crate: {
-				name: string;
-				description: string | null;
-				downloads: number;
-				recent_downloads: number;
-				max_version: string;
-				repository: string | null;
-				homepage: string | null;
-				documentation: string | null;
-				categories: string[];
-				keywords: string[];
-				created_at: string;
-				updated_at: string;
-			};
-			versions: Array<{
-				num: string;
-				downloads: number;
-				created_at: string;
-				license: string | null;
-				rust_version: string | null;
-			}>;
-		};
-
-		try {
-			data = JSON.parse(result.content);
-		} catch {
-			return null;
-		}
-
-		const crate = data.crate;
-		const latestVersion = data.versions?.[0];
-
-		// Format download counts
-		const formatDownloads = (n: number): string =>
-			n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : n >= 1_000 ? `${(n / 1_000).toFixed(1)}K` : String(n);
-
-		let md = `# ${crate.name}\n\n`;
-		if (crate.description) md += `${crate.description}\n\n`;
-
-		md += `**Latest:** ${crate.max_version}`;
-		if (latestVersion?.license) md += ` · **License:** ${latestVersion.license}`;
-		if (latestVersion?.rust_version) md += ` · **MSRV:** ${latestVersion.rust_version}`;
-		md += "\n";
-		md += `**Downloads:** ${formatDownloads(crate.downloads)} total · ${formatDownloads(crate.recent_downloads)} recent\n\n`;
-
-		if (crate.repository) md += `**Repository:** ${crate.repository}\n`;
-		if (crate.homepage && crate.homepage !== crate.repository) md += `**Homepage:** ${crate.homepage}\n`;
-		if (crate.documentation) md += `**Docs:** ${crate.documentation}\n`;
-		if (crate.keywords?.length) md += `**Keywords:** ${crate.keywords.join(", ")}\n`;
-		if (crate.categories?.length) md += `**Categories:** ${crate.categories.join(", ")}\n`;
-
-		// Show recent versions
-		if (data.versions?.length > 0) {
-			md += `\n## Recent Versions\n\n`;
-			for (const ver of data.versions.slice(0, 5)) {
-				const date = ver.created_at.split("T")[0];
-				md += `- **${ver.num}** (${date}) - ${formatDownloads(ver.downloads)} downloads\n`;
-			}
-		}
-
-		// Try to fetch README from docs.rs or repository
-		const docsRsUrl = `https://docs.rs/crate/${crateName}/${crate.max_version}/source/README.md`;
-		const readmeResult = await loadPage(docsRsUrl, { timeout: Math.min(timeout, 5) });
-		if (readmeResult.ok && readmeResult.content.length > 100 && !looksLikeHtml(readmeResult.content)) {
-			md += `\n---\n\n## README\n\n${readmeResult.content}\n`;
-		}
-
-		const output = finalizeOutput(md);
-		return {
-			url,
-			finalUrl: url,
-			contentType: "text/markdown",
-			method: "crates.io",
-			content: output.content,
-			fetchedAt,
-			truncated: output.truncated,
-			notes: ["Fetched via crates.io API"],
-		};
-	} catch {}
-
-	return null;
-}
-
-// =============================================================================
-// arXiv Special Handling
-// =============================================================================
-
-/**
- * Handle arXiv URLs - fetch abstract + optionally PDF
- */
-async function handleArxiv(url: string, timeout: number): Promise<RenderResult | null> {
-	try {
-		const parsed = new URL(url);
-		if (parsed.hostname !== "arxiv.org") return null;
-
-		// Extract paper ID from various URL formats
-		// /abs/1234.56789, /pdf/1234.56789, /abs/cs/0123456
-		const match = parsed.pathname.match(/\/(abs|pdf)\/(.+?)(?:\.pdf)?$/);
-		if (!match) return null;
-
-		const paperId = match[2];
-		const fetchedAt = new Date().toISOString();
-		const notes: string[] = [];
-
-		// Fetch metadata via arXiv API
-		const apiUrl = `https://export.arxiv.org/api/query?id_list=${paperId}`;
-		const result = await loadPage(apiUrl, { timeout });
-
-		if (!result.ok) return null;
-
-		// Parse the Atom feed response
-		const doc = parseHtml(result.content, { parseNoneClosedTags: true });
-		const entry = doc.querySelector("entry");
-
-		if (!entry) return null;
-
-		const title = entry.querySelector("title")?.text?.trim()?.replace(/\s+/g, " ");
-		const summary = entry.querySelector("summary")?.text?.trim();
-		const authors = entry
-			.querySelectorAll("author name")
-			.map((n) => n.text?.trim())
-			.filter(Boolean);
-		const published = entry.querySelector("published")?.text?.trim()?.split("T")[0];
-		const categories = entry
-			.querySelectorAll("category")
-			.map((c) => c.getAttribute("term"))
-			.filter(Boolean);
-		const pdfLink = entry.querySelector('link[title="pdf"]')?.getAttribute("href");
-
-		let md = `# ${title || "arXiv Paper"}\n\n`;
-		if (authors.length) md += `**Authors:** ${authors.join(", ")}\n`;
-		if (published) md += `**Published:** ${published}\n`;
-		if (categories.length) md += `**Categories:** ${categories.join(", ")}\n`;
-		md += `**arXiv:** ${paperId}\n\n`;
-		md += `---\n\n## Abstract\n\n${summary || "No abstract available."}\n\n`;
-
-		// If it was a PDF link or we want full content, try to fetch and convert PDF
-		if (match[1] === "pdf" || parsed.pathname.includes(".pdf")) {
-			if (pdfLink) {
-				notes.push("Fetching PDF for full content...");
-				const pdfResult = await fetchBinary(pdfLink, timeout);
-				if (pdfResult.ok) {
-					const converted = await convertWithMarkitdown(pdfResult.buffer, ".pdf", timeout);
-					if (converted.ok && converted.content.length > 500) {
-						md += `---\n\n## Full Paper\n\n${converted.content}\n`;
-						notes.push("PDF converted via markitdown");
-					}
-				}
-			}
-		}
-
-		const output = finalizeOutput(md);
-		return {
-			url,
-			finalUrl: url,
-			contentType: "text/markdown",
-			method: "arxiv",
-			content: output.content,
-			fetchedAt,
-			truncated: output.truncated,
-			notes: notes.length ? notes : ["Fetched via arXiv API"],
-		};
-	} catch {}
-
-	return null;
-}
-
-// =============================================================================
-// IACR ePrint Special Handling
-// =============================================================================
-
-/**
- * Handle IACR Cryptology ePrint Archive URLs
- */
-async function handleIacr(url: string, timeout: number): Promise<RenderResult | null> {
-	try {
-		const parsed = new URL(url);
-		if (parsed.hostname !== "eprint.iacr.org") return null;
-
-		// Extract paper ID from /year/number or /year/number.pdf
-		const match = parsed.pathname.match(/\/(\d{4})\/(\d+)(?:\.pdf)?$/);
-		if (!match) return null;
-
-		const [, year, number] = match;
-		const paperId = `${year}/${number}`;
-		const fetchedAt = new Date().toISOString();
-		const notes: string[] = [];
-
-		// Fetch the HTML page for metadata
-		const pageUrl = `https://eprint.iacr.org/${paperId}`;
-		const result = await loadPage(pageUrl, { timeout });
-
-		if (!result.ok) return null;
-
-		const doc = parseHtml(result.content);
-
-		// Extract metadata from the page
-		const title =
-			doc.querySelector("h3.mb-3")?.text?.trim() ||
-			doc.querySelector('meta[name="citation_title"]')?.getAttribute("content");
-		const authors = doc
-			.querySelectorAll('meta[name="citation_author"]')
-			.map((m) => m.getAttribute("content"))
-			.filter(Boolean);
-		// Abstract is in <p> after <h5>Abstract</h5>
-		const abstractHeading = doc.querySelectorAll("h5").find((h) => h.text?.includes("Abstract"));
-		const abstract =
-			abstractHeading?.parentNode?.querySelector("p")?.text?.trim() ||
-			doc.querySelector('meta[name="description"]')?.getAttribute("content");
-		const keywords = doc.querySelector(".keywords")?.text?.replace("Keywords:", "").trim();
-		const pubDate = doc.querySelector('meta[name="citation_publication_date"]')?.getAttribute("content");
-
-		let md = `# ${title || "IACR ePrint Paper"}\n\n`;
-		if (authors.length) md += `**Authors:** ${authors.join(", ")}\n`;
-		if (pubDate) md += `**Date:** ${pubDate}\n`;
-		md += `**ePrint:** ${paperId}\n`;
-		if (keywords) md += `**Keywords:** ${keywords}\n`;
-		md += `\n---\n\n## Abstract\n\n${abstract || "No abstract available."}\n\n`;
-
-		// If it was a PDF link, try to fetch and convert PDF
-		if (parsed.pathname.endsWith(".pdf")) {
-			const pdfUrl = `https://eprint.iacr.org/${paperId}.pdf`;
-			notes.push("Fetching PDF for full content...");
-			const pdfResult = await fetchBinary(pdfUrl, timeout);
-			if (pdfResult.ok) {
-				const converted = await convertWithMarkitdown(pdfResult.buffer, ".pdf", timeout);
-				if (converted.ok && converted.content.length > 500) {
-					md += `---\n\n## Full Paper\n\n${converted.content}\n`;
-					notes.push("PDF converted via markitdown");
-				}
-			}
-		}
-
-		const output = finalizeOutput(md);
-		return {
-			url,
-			finalUrl: url,
-			contentType: "text/markdown",
-			method: "iacr",
-			content: output.content,
-			fetchedAt,
-			truncated: output.truncated,
-			notes: notes.length ? notes : ["Fetched from IACR ePrint Archive"],
-		};
-	} catch {}
-
-	return null;
-}
-
-// =============================================================================
-// YouTube Special Handling
-// =============================================================================
-
-interface YouTubeUrl {
-	videoId: string;
-	playlistId?: string;
-}
-
-/**
- * Parse YouTube URL into components
- */
-function parseYouTubeUrl(url: string): YouTubeUrl | null {
-	try {
-		const parsed = new URL(url);
-		const hostname = parsed.hostname.replace(/^www\./, "");
-
-		// youtube.com/watch?v=VIDEO_ID
-		if ((hostname === "youtube.com" || hostname === "m.youtube.com") && parsed.pathname === "/watch") {
-			const videoId = parsed.searchParams.get("v");
-			const playlistId = parsed.searchParams.get("list") || undefined;
-			if (videoId) return { videoId, playlistId };
-		}
-
-		// youtube.com/v/VIDEO_ID or youtube.com/embed/VIDEO_ID
-		if (hostname === "youtube.com" || hostname === "m.youtube.com") {
-			const match = parsed.pathname.match(/^\/(v|embed)\/([a-zA-Z0-9_-]{11})/);
-			if (match) return { videoId: match[2] };
-		}
-
-		// youtu.be/VIDEO_ID
-		if (hostname === "youtu.be") {
-			const videoId = parsed.pathname.slice(1).split("/")[0];
-			if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-				return { videoId };
-			}
-		}
-
-		// youtube.com/shorts/VIDEO_ID
-		if (hostname === "youtube.com" && parsed.pathname.startsWith("/shorts/")) {
-			const videoId = parsed.pathname.replace("/shorts/", "").split("/")[0];
-			if (videoId && /^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
-				return { videoId };
-			}
-		}
-	} catch {}
-
-	return null;
-}
-
-/**
- * Clean VTT subtitle content to plain text
- */
-function cleanVttToText(vtt: string): string {
-	const lines = vtt.split("\n");
-	const textLines: string[] = [];
-	let lastLine = "";
-
-	for (const line of lines) {
-		// Skip WEBVTT header, timestamps, and metadata
-		if (
-			line.startsWith("WEBVTT") ||
-			line.startsWith("Kind:") ||
-			line.startsWith("Language:") ||
-			line.match(/^\d{2}:\d{2}/) || // Timestamp lines
-			line.match(/^[a-f0-9-]{36}$/) || // UUID cue identifiers
-			line.match(/^\d+$/) || // Numeric cue identifiers
-			line.includes("-->") ||
-			line.trim() === ""
-		) {
-			continue;
-		}
-
-		// Remove inline timestamp tags like <00:00:01.520>
-		let cleaned = line.replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "");
-		// Remove other VTT tags like <c> </c>
-		cleaned = cleaned.replace(/<\/?[^>]+>/g, "");
-		cleaned = cleaned.trim();
-
-		// Skip duplicates (auto-generated captions often repeat)
-		if (cleaned && cleaned !== lastLine) {
-			textLines.push(cleaned);
-			lastLine = cleaned;
-		}
-	}
-
-	return textLines.join(" ").replace(/\s+/g, " ").trim();
-}
-
-/**
- * Format duration from seconds to human readable
- */
-function formatDuration(seconds: number): string {
-	const h = Math.floor(seconds / 3600);
-	const m = Math.floor((seconds % 3600) / 60);
-	const s = Math.floor(seconds % 60);
-	if (h > 0) return `${h}:${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-	return `${m}:${s.toString().padStart(2, "0")}`;
-}
-
-/**
- * Handle YouTube URLs - fetch metadata and transcript
- */
-async function handleYouTube(url: string, timeout: number): Promise<RenderResult | null> {
-	const yt = parseYouTubeUrl(url);
-	if (!yt) return null;
-
-	// Check if yt-dlp is available
-	if (!hasCommand("yt-dlp")) {
-		return {
-			url,
-			finalUrl: url,
-			contentType: "text/plain",
-			method: "youtube-no-ytdlp",
-			content:
-				"YouTube video detected but yt-dlp is not installed.\n\nInstall with:\n- brew install yt-dlp (macOS)\n- apt install yt-dlp (Debian/Ubuntu)\n- pip install yt-dlp",
-			fetchedAt: new Date().toISOString(),
-			truncated: false,
-			notes: ["yt-dlp not installed"],
-		};
-	}
-
-	const fetchedAt = new Date().toISOString();
-	const notes: string[] = [];
-	const videoUrl = `https://www.youtube.com/watch?v=${yt.videoId}`;
-
-	// Fetch video metadata
-	const metaResult = exec("yt-dlp", ["--dump-json", "--no-warnings", "--no-playlist", "--skip-download", videoUrl], {
-		timeout: timeout * 1000,
-	});
-
-	let title = "YouTube Video";
-	let channel = "";
-	let description = "";
-	let duration = 0;
-	let uploadDate = "";
-	let viewCount = 0;
-
-	if (metaResult.ok && metaResult.stdout.trim()) {
-		try {
-			const meta = JSON.parse(metaResult.stdout) as {
-				title?: string;
-				channel?: string;
-				uploader?: string;
-				description?: string;
-				duration?: number;
-				upload_date?: string;
-				view_count?: number;
-			};
-			title = meta.title || title;
-			channel = meta.channel || meta.uploader || "";
-			description = meta.description || "";
-			duration = meta.duration || 0;
-			uploadDate = meta.upload_date || "";
-			viewCount = meta.view_count || 0;
-		} catch {}
-	}
-
-	// Format upload date
-	let formattedDate = "";
-	if (uploadDate && uploadDate.length === 8) {
-		formattedDate = `${uploadDate.slice(0, 4)}-${uploadDate.slice(4, 6)}-${uploadDate.slice(6, 8)}`;
-	}
-
-	// Try to fetch subtitles
-	let transcript = "";
-	let transcriptSource = "";
-
-	// First, list available subtitles
-	const listResult = exec("yt-dlp", ["--list-subs", "--no-warnings", "--no-playlist", "--skip-download", videoUrl], {
-		timeout: timeout * 1000,
-	});
-
-	const hasManualSubs = listResult.stdout.includes("[info] Available subtitles");
-	const hasAutoSubs = listResult.stdout.includes("[info] Available automatic captions");
-
-	// Create temp directory for subtitle download
-	const tmpDir = tmpdir();
-	const tmpBase = path.join(tmpDir, `yt-${yt.videoId}-${Date.now()}`);
-
-	try {
-		// Try manual subtitles first (English preferred)
-		if (hasManualSubs) {
-			const subResult = exec(
-				"yt-dlp",
-				[
-					"--write-sub",
-					"--sub-lang",
-					"en,en-US,en-GB",
-					"--sub-format",
-					"vtt",
-					"--skip-download",
-					"--no-warnings",
-					"--no-playlist",
-					"-o",
-					tmpBase,
-					videoUrl,
-				],
-				{ timeout: timeout * 1000 },
-			);
-
-			if (subResult.ok) {
-				// Find the downloaded subtitle file
-				const subFiles = await Bun.$`ls ${tmpBase}*.vtt 2>/dev/null || true`.quiet().text();
-				const firstSub = subFiles.trim().split("\n")[0];
-				if (firstSub) {
-					const vttContent = await Bun.file(firstSub).text();
-					transcript = cleanVttToText(vttContent);
-					transcriptSource = "manual";
-					notes.push("Using manual subtitles");
-				}
-			}
-		}
-
-		// Fall back to auto-generated captions
-		if (!transcript && hasAutoSubs) {
-			const autoResult = exec(
-				"yt-dlp",
-				[
-					"--write-auto-sub",
-					"--sub-lang",
-					"en,en-US,en-GB",
-					"--sub-format",
-					"vtt",
-					"--skip-download",
-					"--no-warnings",
-					"--no-playlist",
-					"-o",
-					tmpBase,
-					videoUrl,
-				],
-				{ timeout: timeout * 1000 },
-			);
-
-			if (autoResult.ok) {
-				const subFiles = await Bun.$`ls ${tmpBase}*.vtt 2>/dev/null || true`.quiet().text();
-				const firstSub = subFiles.trim().split("\n")[0];
-				if (firstSub) {
-					const vttContent = await Bun.file(firstSub).text();
-					transcript = cleanVttToText(vttContent);
-					transcriptSource = "auto-generated";
-					notes.push("Using auto-generated captions");
-				}
-			}
-		}
-	} finally {
-		// Cleanup temp files
-		try {
-			await Bun.$`rm -f ${tmpBase}*`.quiet();
-		} catch {}
-	}
-
-	// Build markdown output
-	let md = `# ${title}\n\n`;
-	if (channel) md += `**Channel:** ${channel}\n`;
-	if (formattedDate) md += `**Uploaded:** ${formattedDate}\n`;
-	if (duration > 0) md += `**Duration:** ${formatDuration(duration)}\n`;
-	if (viewCount > 0) {
-		const formatted =
-			viewCount >= 1_000_000
-				? `${(viewCount / 1_000_000).toFixed(1)}M`
-				: viewCount >= 1_000
-					? `${(viewCount / 1_000).toFixed(1)}K`
-					: String(viewCount);
-		md += `**Views:** ${formatted}\n`;
-	}
-	md += `**Video ID:** ${yt.videoId}\n\n`;
-
-	if (description) {
-		// Truncate long descriptions
-		const descPreview = description.length > 1000 ? `${description.slice(0, 1000)}...` : description;
-		md += `---\n\n## Description\n\n${descPreview}\n\n`;
-	}
-
-	if (transcript) {
-		md += `---\n\n## Transcript (${transcriptSource})\n\n${transcript}\n`;
-	} else {
-		notes.push("No subtitles/captions available");
-		md += `---\n\n*No transcript available for this video.*\n`;
-	}
-
-	const output = finalizeOutput(md);
-	return {
-		url,
-		finalUrl: videoUrl,
-		contentType: "text/markdown",
-		method: "youtube",
-		content: output.content,
-		fetchedAt,
-		truncated: output.truncated,
-		notes,
-	};
-}
-
-// =============================================================================
-// GitHub Gist Special Handling
-// =============================================================================
-
-/**
- * Handle GitHub Gist URLs via API
- */
-async function handleGitHubGist(url: string, timeout: number): Promise<RenderResult | null> {
-	try {
-		const parsed = new URL(url);
-		if (parsed.hostname !== "gist.github.com") return null;
-
-		// Extract gist ID from /username/gistId or just /gistId
-		const parts = parsed.pathname.split("/").filter(Boolean);
-		if (parts.length === 0) return null;
-
-		// Gist ID is always the last path segment (or only segment for anonymous gists)
-		const gistId = parts[parts.length - 1];
-		if (!gistId || !/^[a-f0-9]+$/i.test(gistId)) return null;
-
-		const fetchedAt = new Date().toISOString();
-
-		// Fetch via GitHub API
-		const result = await fetchGitHubApi(`/gists/${gistId}`, timeout);
-		if (!result.ok || !result.data) return null;
-
-		const gist = result.data as {
-			description: string | null;
-			owner?: { login: string };
-			created_at: string;
-			updated_at: string;
-			files: Record<string, { filename: string; language: string | null; size: number; content: string }>;
-			html_url: string;
-		};
-
-		const files = Object.values(gist.files);
-		const owner = gist.owner?.login || "anonymous";
-
-		let md = `# Gist by ${owner}\n\n`;
-		if (gist.description) md += `${gist.description}\n\n`;
-		md += `**Created:** ${gist.created_at} · **Updated:** ${gist.updated_at}\n`;
-		md += `**Files:** ${files.length}\n\n`;
-
-		for (const file of files) {
-			const lang = file.language?.toLowerCase() || "";
-			md += `---\n\n## ${file.filename}\n\n`;
-			md += `\`\`\`${lang}\n${file.content}\n\`\`\`\n\n`;
-		}
-
-		const output = finalizeOutput(md);
-		return {
-			url,
-			finalUrl: url,
-			contentType: "text/markdown",
-			method: "github-gist",
-			content: output.content,
-			fetchedAt,
-			truncated: output.truncated,
-			notes: ["Fetched via GitHub API"],
-		};
-	} catch {}
-
-	return null;
-}
-
-// =============================================================================
 // Unified Special Handler Dispatch
 // =============================================================================
 
@@ -2231,17 +726,70 @@ async function handleGitHubGist(url: string, timeout: number): Promise<RenderRes
 async function handleSpecialUrls(url: string, timeout: number): Promise<RenderResult | null> {
 	// Order matters - more specific first
 	return (
+		// Git hosting
 		(await handleGitHubGist(url, timeout)) ||
 		(await handleGitHub(url, timeout)) ||
+		(await handleGitLab(url, timeout)) ||
+		// Video/Media
 		(await handleYouTube(url, timeout)) ||
+		(await handleVimeo(url, timeout)) ||
+		(await handleSpotify(url, timeout)) ||
+		(await handleDiscogs(url, timeout)) ||
+		// Social/News
 		(await handleTwitter(url, timeout)) ||
-		(await handleStackOverflow(url, timeout)) ||
-		(await handleWikipedia(url, timeout)) ||
+		(await handleBluesky(url, timeout)) ||
+		(await handleMastodon(url, timeout)) ||
+		(await handleHackerNews(url, timeout)) ||
+		(await handleLobsters(url, timeout)) ||
 		(await handleReddit(url, timeout)) ||
+		// Developer content
+		(await handleStackOverflow(url, timeout)) ||
+		(await handleDevTo(url, timeout)) ||
+		(await handleMDN(url, timeout)) ||
+		(await handleReadTheDocs(url, timeout)) ||
+		(await handleTldr(url, timeout)) ||
+		(await handleCheatSh(url, timeout)) ||
+		// Package registries
 		(await handleNpm(url, timeout)) ||
+		(await handleNuGet(url, timeout)) ||
+		(await handleChocolatey(url, timeout)) ||
+		(await handleBrew(url, timeout)) ||
+		(await handlePyPI(url, timeout)) ||
 		(await handleCratesIo(url, timeout)) ||
+		(await handleDockerHub(url, timeout)) ||
+		(await handleGoPkg(url, timeout)) ||
+		(await handleHex(url, timeout)) ||
+		(await handlePackagist(url, timeout)) ||
+		(await handlePubDev(url, timeout)) ||
+		(await handleMaven(url, timeout)) ||
+		(await handleArtifactHub(url, timeout)) ||
+		(await handleRubyGems(url, timeout)) ||
+		(await handleTerraform(url, timeout)) ||
+		(await handleAur(url, timeout)) ||
+		(await handleHackage(url, timeout)) ||
+		(await handleMetaCPAN(url, timeout)) ||
+		(await handleRepology(url, timeout)) ||
+		// ML/AI
+		(await handleHuggingFace(url, timeout)) ||
+		// Academic
 		(await handleArxiv(url, timeout)) ||
-		(await handleIacr(url, timeout))
+		(await handleBiorxiv(url, timeout)) ||
+		(await handleIacr(url, timeout)) ||
+		(await handleSemanticScholar(url, timeout)) ||
+		(await handlePubMed(url, timeout)) ||
+		(await handleRfc(url, timeout)) ||
+		// Security
+		(await handleNvd(url, timeout)) ||
+		(await handleOsv(url, timeout)) ||
+		// Crypto
+		(await handleCoinGecko(url, timeout)) ||
+		// Business
+		(await handleOpenCorporates(url, timeout)) ||
+		(await handleSecEdgar(url, timeout)) ||
+		// Reference
+		(await handleOpenLibrary(url, timeout)) ||
+		(await handleWikidata(url, timeout)) ||
+		(await handleWikipedia(url, timeout))
 	);
 }
 
@@ -2456,25 +1004,10 @@ async function renderUrl(url: string, timeout: number, raw: boolean = false): Pr
 			}
 		}
 
-		// Step 6: Render HTML with lynx
-		if (!hasCommand("lynx")) {
-			notes.push("lynx not installed");
-			const output = finalizeOutput(rawContent);
-			return {
-				url,
-				finalUrl,
-				contentType: mime,
-				method: "raw-html",
-				content: output.content,
-				fetchedAt,
-				truncated: output.truncated,
-				notes,
-			};
-		}
-
-		const lynxResult = await renderWithLynx(rawContent, timeout);
-		if (!lynxResult.ok) {
-			notes.push("lynx failed");
+		// Step 6: Render HTML with lynx or html2text
+		const htmlResult = await renderHtmlToText(rawContent, timeout);
+		if (!htmlResult.ok) {
+			notes.push("html rendering failed (lynx/html2text unavailable)");
 			const output = finalizeOutput(rawContent);
 			return {
 				url,
@@ -2489,7 +1022,7 @@ async function renderUrl(url: string, timeout: number, raw: boolean = false): Pr
 		}
 
 		// Step 7: If lynx output is low quality, try extracting document links
-		if (isLowQualityOutput(lynxResult.content)) {
+		if (isLowQualityOutput(htmlResult.content)) {
 			const docLinks = extractDocumentLinks(rawContent, finalUrl);
 			if (docLinks.length > 0) {
 				const docUrl = docLinks[0];
@@ -2497,7 +1030,7 @@ async function renderUrl(url: string, timeout: number, raw: boolean = false): Pr
 				if (binary.ok) {
 					const ext = getExtensionHint(docUrl, binary.contentDisposition);
 					const converted = await convertWithMarkitdown(binary.buffer, ext, timeout);
-					if (converted.ok && converted.content.trim().length > lynxResult.content.length) {
+					if (converted.ok && converted.content.trim().length > htmlResult.content.length) {
 						notes.push(`Extracted and converted document: ${docUrl}`);
 						const output = finalizeOutput(converted.content);
 						return {
@@ -2516,12 +1049,12 @@ async function renderUrl(url: string, timeout: number, raw: boolean = false): Pr
 			notes.push("Page appears to require JavaScript or is mostly navigation");
 		}
 
-		const output = finalizeOutput(lynxResult.content);
+		const output = finalizeOutput(htmlResult.content);
 		return {
 			url,
 			finalUrl,
 			contentType: mime,
-			method: "lynx",
+			method: htmlResult.method,
 			content: output.content,
 			fetchedAt,
 			truncated: output.truncated,

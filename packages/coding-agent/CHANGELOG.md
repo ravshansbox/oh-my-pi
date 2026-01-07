@@ -1,8 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
+- Added specialized web-fetch handlers for 50+ platforms including GitHub, GitLab, npm, PyPI, crates.io, Stack Overflow, Wikipedia, arXiv, PubMed, Hacker News, Reddit, Mastodon, Bluesky, and many more
+- Added automatic yt-dlp installation for YouTube transcript extraction
 - Added YouTube video support with automatic transcript extraction via yt-dlp
 
 ## [3.25.0] - 2026-01-07
