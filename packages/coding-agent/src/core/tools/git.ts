@@ -225,7 +225,6 @@ export function createGitTool(session: ToolSession): AgentTool<typeof gitSchema,
 export const gitTool = createGitTool({
 	cwd: process.cwd(),
 	hasUI: false,
-	rulebookRules: [],
 	getSessionFile: () => null,
 	getSessionSpawns: () => null,
 })!;

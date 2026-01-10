@@ -7,15 +7,14 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import chalk from "chalk";
 import { contextFileCapability } from "../capability/context-file";
-import type { Rule } from "../capability/rule";
 import { systemPromptCapability } from "../capability/system-prompt";
 import { type ContextFile, loadSync, type SystemPrompt as SystemPromptFile } from "../discovery/index";
-import systemPromptTemplate from "../prompts/system-prompt.md" with { type: "text" };
+import customSystemPromptTemplate from "../prompts/system/custom-system-prompt.md" with { type: "text" };
+import systemPromptTemplate from "../prompts/system/system-prompt.md" with { type: "text" };
 import { renderPromptTemplate } from "./prompt-templates";
 import type { SkillsSettings } from "./settings-manager";
-import { formatSkillsForPrompt, loadSkills, type Skill } from "./skills";
+import { loadSkills, type Skill } from "./skills";
 import type { ToolName } from "./tools/index";
-import { formatRulesForPrompt } from "./tools/rulebook";
 
 /**
  * Execute a git command synchronously and return stdout or null on failure.
@@ -26,11 +25,19 @@ function execGit(args: string[], cwd: string): string | null {
 	return result.stdout.toString().trim() || null;
 }
 
+interface GitContext {
+	isRepo: boolean;
+	currentBranch: string;
+	mainBranch: string;
+	status: string;
+	commits: string;
+}
+
 /**
  * Load git context for the system prompt.
- * Returns formatted git status or null if not in a git repo.
+ * Returns structured git data or null if not in a git repo.
  */
-export function loadGitContext(cwd: string): string | null {
+export function loadGitContext(cwd: string): GitContext | null {
 	// Check if inside a git repo
 	const isGitRepo = execGit(["rev-parse", "--is-inside-work-tree"], cwd);
 	if (isGitRepo !== "true") return null;
@@ -49,22 +56,19 @@ export function loadGitContext(cwd: string): string | null {
 
 	// Get git status (porcelain format for parsing)
 	const gitStatus = execGit(["status", "--porcelain"], cwd);
-	const statusText = gitStatus?.trim() || "(clean)";
+	const status = gitStatus?.trim() || "(clean)";
 
 	// Get recent commits
 	const recentCommits = execGit(["log", "--oneline", "-5"], cwd);
-	const commitsText = recentCommits?.trim() || "(no commits)";
+	const commits = recentCommits?.trim() || "(no commits)";
 
-	return `This is the git status at the start of the conversation. Note that this status is a snapshot in time, and will not update during the conversation.
-Current branch: ${currentBranch}
-
-Main branch (you will usually use this for PRs): ${mainBranch}
-
-Status:
-${statusText}
-
-Recent commits:
-${commitsText}`;
+	return {
+		isRepo: true,
+		currentBranch,
+		mainBranch,
+		status,
+		commits,
+	};
 }
 
 /** Tool descriptions for system prompt */
@@ -88,45 +92,6 @@ const toolDescriptions: Record<ToolName, string> = {
 	web_search: "Search the web for information",
 	report_finding: "Report a finding during code review",
 };
-
-function appendBlock(prompt: string, block: string | null | undefined, separator = "\n\n"): string {
-	if (!block) return prompt;
-	if (block.startsWith("\n")) {
-		return `${prompt}${block}`;
-	}
-	return `${prompt}${separator}${block}`;
-}
-
-function appendSection(prompt: string, title: string, content: string | null | undefined): string {
-	if (!content) return prompt;
-	return `${prompt}\n\n# ${title}\n\n${content}`;
-}
-
-function formatSectionBlock(title: string, content: string | null | undefined): string {
-	if (!content) return "";
-	return `# ${title}\n\n${content}`;
-}
-
-function formatProjectContext(contextFiles: Array<{ path: string; content: string; depth?: number }>): string | null {
-	if (contextFiles.length === 0) return null;
-	const parts: string[] = ["<project_context_files>"];
-	for (const { path: filePath, content } of contextFiles) {
-		parts.push(`<file path="${filePath}">`, content, "</file>");
-	}
-	parts.push("</project_context_files>");
-	return parts.join("\n");
-}
-
-function formatToolDescriptions(tools: Map<string, { description: string; label: string }> | undefined): string | null {
-	if (!tools || tools.size === 0) return null;
-	return Array.from(tools.entries())
-		.map(([name, { description }]) => `- ${name}: ${description}`)
-		.join("\n");
-}
-
-function buildPromptFooter(dateTime: string, cwd: string): string {
-	return `Current date and time: ${dateTime}\nCurrent working directory: ${cwd}`;
-}
 
 function execCommand(args: string[]): string | null {
 	const result = Bun.spawnSync(args, { stdin: "ignore", stdout: "pipe", stderr: "pipe" });
@@ -503,7 +468,7 @@ function getDiskInfo(): string | null {
 	}
 }
 
-function formatEnvironmentInfo(): string {
+function getEnvironmentInfo(): Array<{ label: string; value: string }> {
 	// Load cached system info or collect fresh
 	let sysInfo = loadSystemInfoCache();
 	if (!sysInfo) {
@@ -511,127 +476,19 @@ function formatEnvironmentInfo(): string {
 		saveSystemInfoCache(sysInfo);
 	}
 
-	// Session-specific values (not cached)
-	const items: Array<[string, string]> = [
-		["OS", sysInfo.os],
-		["Distro", sysInfo.distro],
-		["Kernel", sysInfo.kernel],
-		["Arch", sysInfo.arch],
-		["CPU", sysInfo.cpu],
-		["GPU", sysInfo.gpu],
-		["Disk", sysInfo.disk],
-		["Shell", getShellName()],
-		["Terminal", getTerminalName()],
-		["DE", getDesktopEnvironment()],
-		["WM", getWindowManager()],
+	return [
+		{ label: "OS", value: sysInfo.os },
+		{ label: "Distro", value: sysInfo.distro },
+		{ label: "Kernel", value: sysInfo.kernel },
+		{ label: "Arch", value: sysInfo.arch },
+		{ label: "CPU", value: sysInfo.cpu },
+		{ label: "GPU", value: sysInfo.gpu },
+		{ label: "Disk", value: sysInfo.disk },
+		{ label: "Shell", value: getShellName() },
+		{ label: "Terminal", value: getTerminalName() },
+		{ label: "DE", value: getDesktopEnvironment() },
+		{ label: "WM", value: getWindowManager() },
 	];
-	return items.map(([label, value]) => `- ${label}: ${value}`).join("\n");
-}
-
-/**
- * Generate anti-bash rules section if the agent has both bash and specialized tools.
- * Only include rules for tools that are actually available.
- */
-function generateAntiBashRules(tools: ToolName[]): string | null {
-	const hasBash = tools.includes("bash");
-	if (!hasBash) return null;
-
-	const hasRead = tools.includes("read");
-	const hasGrep = tools.includes("grep");
-	const hasFind = tools.includes("find");
-	const hasLs = tools.includes("ls");
-	const hasEdit = tools.includes("edit");
-	const hasLsp = tools.includes("lsp");
-	const hasGit = tools.includes("git");
-
-	// Only show rules if we have specialized tools that should be preferred
-	const hasSpecializedTools = hasRead || hasGrep || hasFind || hasLs || hasEdit || hasGit;
-	if (!hasSpecializedTools) return null;
-
-	const lines: string[] = [];
-	lines.push("## Tool Usage Rules — MANDATORY\n");
-	lines.push("### Forbidden Bash Patterns");
-	lines.push("NEVER use bash for these operations:\n");
-
-	if (hasRead) lines.push("- **File reading**: Use `read` instead of cat/head/tail/less/more");
-	if (hasGrep) lines.push("- **Content search**: Use `grep` instead of grep/rg/ag/ack");
-	if (hasFind) lines.push("- **File finding**: Use `find` instead of find/fd/locate");
-	if (hasLs) lines.push("- **Directory listing**: Use `ls` instead of bash ls");
-	if (hasEdit) lines.push("- **File editing**: Use `edit` instead of sed/awk/perl -pi/echo >/cat <<EOF");
-	if (hasGit) lines.push("- **Git operations**: Use `git` tool instead of bash git commands");
-
-	lines.push("\n### Tool Preference (highest → lowest priority)");
-	const ladder: string[] = [];
-	if (hasLsp) ladder.push("lsp (go-to-definition, references, type info) — DETERMINISTIC");
-	if (hasGrep) ladder.push("grep (text/regex search)");
-	if (hasFind) ladder.push("find (locate files by pattern)");
-	if (hasRead) ladder.push("read (view file contents)");
-	if (hasEdit) ladder.push("edit (precise text replacement)");
-	if (hasGit) ladder.push("git (structured git operations with safety guards)");
-	ladder.push(`bash (ONLY for ${hasGit ? "" : "git, "}npm, docker, make, cargo, etc.)`);
-	lines.push(ladder.map((t, i) => `${i + 1}. ${t}`).join("\n"));
-
-	// Add LSP guidance if available
-	if (hasLsp) {
-		lines.push("\n### LSP — Preferred for Semantic Queries");
-		lines.push("Use `lsp` instead of grep/bash when you need:");
-		lines.push("- **Where is X defined?** → `lsp definition`");
-		lines.push("- **What calls X?** → `lsp incoming_calls`");
-		lines.push("- **What does X call?** → `lsp outgoing_calls`");
-		lines.push("- **What type is X?** → `lsp hover`");
-		lines.push("- **What symbols are in this file?** → `lsp symbols`");
-		lines.push("- **Find symbol across codebase** → `lsp workspace_symbols`\n");
-	}
-
-	// Add Git guidance if available
-	if (hasGit) {
-		lines.push("\n### Git Tool — Preferred for Git Operations");
-		lines.push("Use `git` instead of bash git when you need:");
-		lines.push(
-			"- **Status/diff/log**: `git { operation: 'status' }`, `git { operation: 'diff' }`, `git { operation: 'log' }`",
-		);
-		lines.push(
-			"- **Commit workflow**: `git { operation: 'add', paths: [...] }` then `git { operation: 'commit', message: '...' }`",
-		);
-		lines.push("- **Branching**: `git { operation: 'branch', action: 'create', name: '...' }`");
-		lines.push("- **GitHub PRs**: `git { operation: 'pr', action: 'create', title: '...', body: '...' }`");
-		lines.push(
-			"- **GitHub Issues**: `git { operation: 'issue', action: 'list' }` or `{ operation: 'issue', number: 123 }`",
-		);
-		lines.push(
-			"The git tool provides typed output, safety guards, and a clean API for all git and GitHub operations.\n",
-		);
-	}
-
-	// Add SSH remote filesystem guidance if available
-	const hasSSH = tools.includes("ssh");
-	if (hasSSH) {
-		lines.push("\n### SSH Command Execution");
-		lines.push(
-			"**Critical**: Each SSH host runs a specific shell. **You MUST match commands to the host's shell type**.",
-		);
-		lines.push("Check the host list in the ssh tool description. Shell types:");
-		lines.push("- linux/bash, linux/zsh, macos/bash, macos/zsh: ls, cat, grep, find, ps, df, uname");
-		lines.push("- windows/bash, windows/sh: ls, cat, grep, find (Windows with WSL/Cygwin — Unix commands)");
-		lines.push("- windows/cmd: dir, type, findstr, tasklist, systeminfo");
-		lines.push("- windows/powershell: Get-ChildItem, Get-Content, Select-String, Get-Process");
-		lines.push("");
-		lines.push("### SSH Filesystems");
-		lines.push("Mounted at `~/.omp/remote/<hostname>/` — use read/edit/write tools directly.");
-		lines.push("Windows paths need colon: `~/.omp/remote/host/C:/Users/...` not `C/Users/...`\n");
-	}
-
-	// Add search-first protocol
-	if (hasGrep || hasFind) {
-		lines.push("\n### Search-First Protocol");
-		lines.push("Before reading any file:");
-		if (hasFind) lines.push("1. Unknown structure → `find` to see file layout");
-		if (hasGrep) lines.push("2. Known location → `grep` for specific symbol/error");
-		if (hasRead) lines.push("3. Use `read offset/limit` for line ranges, not entire large files");
-		lines.push("4. Never read a large file hoping to find something — search first");
-	}
-
-	return lines.join("\n");
 }
 
 /** Resolve input as file path or literal string */
@@ -731,7 +588,7 @@ export interface BuildSystemPromptOptions {
 	/** Pre-loaded skills (skips discovery if provided). */
 	skills?: Skill[];
 	/** Pre-loaded rulebook rules (rules with descriptions, excluding TTSR and always-apply). */
-	rules?: Rule[];
+	rules?: Array<{ name: string; description?: string; path: string; globs?: string[] }>;
 }
 
 /** Build the system prompt with tools, guidelines, and context */
@@ -745,7 +602,7 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 		cwd,
 		contextFiles: providedContextFiles,
 		skills: providedSkills,
-		rules: rulebookRules,
+		rules,
 	} = options;
 	const resolvedCwd = cwd ?? process.cwd();
 	const resolvedCustomPrompt = resolvePromptInput(customPrompt, "system prompt");
@@ -769,113 +626,63 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions = {}): strin
 	// Resolve context files: use provided or discover
 	const contextFiles = providedContextFiles ?? loadProjectContextFiles({ cwd: resolvedCwd });
 
-	// Build tools list based on selected tools
-	const selectedToolNames = toolNames ?? (["read", "bash", "edit", "write"] as ToolName[]);
-	const toolsList =
-		selectedToolNames.length > 0
-			? selectedToolNames.map((name) => `- ${name}: ${toolDescriptions[name as ToolName]}`).join("\n")
-			: "(none)";
+	// Build tool descriptions array
+	// Priority: toolNames (explicit list) > tools (Map) > defaults
+	const defaultToolNames: ToolName[] = ["read", "bash", "edit", "write"];
+	let toolNamesArray: string[];
+	if (toolNames !== undefined) {
+		// Explicit toolNames list provided (could be empty)
+		toolNamesArray = toolNames;
+	} else if (tools !== undefined) {
+		// Tools map provided
+		toolNamesArray = Array.from(tools.keys());
+	} else {
+		// Use defaults
+		toolNamesArray = defaultToolNames;
+	}
+	const toolDescriptionsArray = toolNamesArray.map((name) => ({
+		name,
+		description: toolDescriptions[name as ToolName] ?? "",
+	}));
 
 	// Resolve skills: use provided or discover
 	const skills =
 		providedSkills ??
 		(skillsSettings?.enabled !== false ? loadSkills({ ...skillsSettings, cwd: resolvedCwd }).skills : []);
 
-	if (resolvedCustomPrompt) {
-		let prompt = systemPromptCustomization
-			? `${systemPromptCustomization}\n\n${resolvedCustomPrompt}`
-			: resolvedCustomPrompt;
+	// Get git context
+	const git = loadGitContext(resolvedCwd);
 
-		prompt = appendBlock(prompt, resolvedAppendPrompt);
-		prompt = appendSection(prompt, "Project Context", formatProjectContext(contextFiles));
-		prompt = appendSection(prompt, "Tools", formatToolDescriptions(tools));
-
-		const gitContext = loadGitContext(resolvedCwd);
-		prompt = appendSection(prompt, "Git Status", gitContext);
-
-		if (tools?.has("read") && skills.length > 0) {
-			prompt = appendBlock(prompt, formatSkillsForPrompt(skills));
-		}
-
-		if (rulebookRules && rulebookRules.length > 0) {
-			prompt = appendBlock(prompt, formatRulesForPrompt(rulebookRules));
-		}
-
-		prompt = appendBlock(prompt, buildPromptFooter(dateTime, resolvedCwd), "\n");
-
-		return prompt;
-	}
-
-	// Generate anti-bash rules (returns null if not applicable)
-	const antiBashSection = generateAntiBashRules(Array.from(tools?.keys() ?? []));
-	const environmentInfo = formatEnvironmentInfo();
-
-	// Build guidelines based on which tools are actually available
-	const guidelinesList: string[] = [];
-
-	const hasBash = tools?.has("bash");
-	const hasEdit = tools?.has("edit");
-	const hasWrite = tools?.has("write");
+	// Filter skills to only include those with read tool
 	const hasRead = tools?.has("read");
+	const filteredSkills = hasRead ? skills : [];
 
-	// Bash without edit/write = read-only bash mode
-	if (hasBash && !hasEdit && !hasWrite) {
-		guidelinesList.push(
-			"Use bash only for read-only operations (git log, gh issue view, curl, etc.). Use edit/write for file changes.",
-		);
+	if (resolvedCustomPrompt) {
+		return renderPromptTemplate(customSystemPromptTemplate, {
+			systemPromptCustomization: systemPromptCustomization ?? "",
+			customPrompt: resolvedCustomPrompt,
+			appendPrompt: resolvedAppendPrompt ?? "",
+			contextFiles,
+			toolDescriptions: toolDescriptionsArray,
+			git,
+			skills: filteredSkills,
+			rules: rules ?? [],
+			dateTime,
+			cwd: resolvedCwd,
+		});
 	}
 
-	// Read before edit guideline
-	if (hasRead && hasEdit) {
-		guidelinesList.push("Use read to examine files before editing");
-	}
-
-	// Edit guideline
-	if (hasEdit) {
-		guidelinesList.push(
-			"Use edit for precise changes (old text must match exactly, fuzzy matching handles whitespace)",
-		);
-	}
-
-	// Write guideline
-	if (hasWrite) {
-		guidelinesList.push("Use write only for new files or complete rewrites");
-	}
-
-	// Output guideline (only when actually writing/executing)
-	if (hasEdit || hasWrite) {
-		guidelinesList.push(
-			"When summarizing your actions, output plain text directly; reference file paths instead of reprinting content.",
-		);
-	}
-
-	// Always include these
-	guidelinesList.push("Be concise in your responses");
-	guidelinesList.push("Show file paths clearly when working with files");
-
-	const guidelines = guidelinesList.map((g) => `- ${g}`).join("\n");
-
-	// Build the prompt with anti-bash rules prominently placed
-	const antiBashBlock = antiBashSection ? `\n${antiBashSection}\n` : "";
-	const projectContext = formatSectionBlock("Project Context", formatProjectContext(contextFiles));
-	const gitContext = formatSectionBlock("Git Status", loadGitContext(resolvedCwd));
-	const skillsBlock = hasRead && skills.length > 0 ? formatSkillsForPrompt(skills) : "";
-	const rulesBlock = rulebookRules && rulebookRules.length > 0 ? formatRulesForPrompt(rulebookRules) : "";
-	const appendSystemPromptBlock = resolvedAppendPrompt ? `\n${resolvedAppendPrompt}\n` : "";
-
-	const prompt = renderPromptTemplate(systemPromptTemplate, {
-		toolsList,
-		antiBashSection: antiBashBlock,
-		guidelines,
-		environmentInfo,
+	return renderPromptTemplate(systemPromptTemplate, {
+		tools: toolNamesArray,
+		toolDescriptions: toolDescriptionsArray,
+		environment: getEnvironmentInfo(),
 		systemPromptCustomization: systemPromptCustomization ?? "",
-		projectContext,
-		gitContext,
-		skillsBlock,
-		rulesBlock,
-		promptFooter: buildPromptFooter(dateTime, resolvedCwd),
-		appendSystemPrompt: appendSystemPromptBlock,
+		contextFiles,
+		git,
+		skills: filteredSkills,
+		rules: rules ?? [],
+		dateTime,
+		cwd: resolvedCwd,
+		appendSystemPrompt: resolvedAppendPrompt ?? "",
 	});
-
-	return prompt;
 }

@@ -4,7 +4,8 @@
 
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Message } from "@oh-my-pi/pi-ai";
-import summarizationSystemPrompt from "../../prompts/summarization-system.md" with { type: "text" };
+import fileOperationsTemplate from "../../prompts/system/file-operations.md" with { type: "text" };
+import summarizationSystemPrompt from "../../prompts/system/summarization-system.md" with { type: "text" };
 import { renderPromptTemplate } from "../prompt-templates";
 
 // ============================================================================
@@ -72,15 +73,8 @@ export function computeFileLists(fileOps: FileOperations): { readFiles: string[]
  * Format file operations as XML tags for summary.
  */
 export function formatFileOperations(readFiles: string[], modifiedFiles: string[]): string {
-	const sections: string[] = [];
-	if (readFiles.length > 0) {
-		sections.push(`<read-files>\n${readFiles.join("\n")}\n</read-files>`);
-	}
-	if (modifiedFiles.length > 0) {
-		sections.push(`<modified-files>\n${modifiedFiles.join("\n")}\n</modified-files>`);
-	}
-	if (sections.length === 0) return "";
-	return `\n\n${sections.join("\n\n")}`;
+	if (readFiles.length === 0 && modifiedFiles.length === 0) return "";
+	return renderPromptTemplate(fileOperationsTemplate, { readFiles, modifiedFiles });
 }
 
 // ============================================================================

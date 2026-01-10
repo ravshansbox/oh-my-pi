@@ -26,7 +26,6 @@ export { createNotebookTool, type NotebookToolDetails } from "./notebook";
 export { createOutputTool, type OutputToolDetails } from "./output";
 export { createReadTool, type ReadToolDetails } from "./read";
 export { reportFindingTool, type SubmitReviewDetails } from "./review";
-export { filterRulebookRules, formatRulesForPrompt, type RulebookToolDetails } from "./rulebook";
 export { createSshTool, type SSHToolDetails } from "./ssh";
 export { BUNDLED_AGENTS, createTaskTool, taskTool } from "./task/index";
 export {
@@ -62,7 +61,6 @@ export {
 export { createWriteTool, type WriteToolDetails } from "./write";
 
 import type { AgentTool } from "@oh-my-pi/pi-agent-core";
-import type { Rule } from "../../capability/rule";
 import type { EventBus } from "../event-bus";
 import type { BashInterceptorRule } from "../settings-manager";
 import { createAskTool } from "./ask";
@@ -79,7 +77,6 @@ import { createNotebookTool } from "./notebook";
 import { createOutputTool } from "./output";
 import { createReadTool } from "./read";
 import { reportFindingTool } from "./review";
-import { createRulebookTool } from "./rulebook";
 import { createSshTool } from "./ssh";
 import { createTaskTool } from "./task/index";
 import { createWebFetchTool } from "./web-fetch";
@@ -95,8 +92,6 @@ export interface ToolSession {
 	cwd: string;
 	/** Whether UI is available */
 	hasUI: boolean;
-	/** Rulebook rules */
-	rulebookRules: Rule[];
 	/** Event bus for tool/extension communication */
 	eventBus?: EventBus;
 	/** Output schema for structured completion (subagents) */
@@ -141,7 +136,6 @@ export const BUILTIN_TOOLS: Record<string, ToolFactory> = {
 	notebook: createNotebookTool,
 	output: createOutputTool,
 	read: createReadTool,
-	rulebook: createRulebookTool,
 	task: createTaskTool,
 	web_fetch: createWebFetchTool,
 	web_search: createWebSearchTool,

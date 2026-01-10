@@ -8,8 +8,8 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { Model } from "@oh-my-pi/pi-ai";
 import { completeSimple } from "@oh-my-pi/pi-ai";
-import branchSummaryPrompt from "../../prompts/branch-summary.md" with { type: "text" };
-import branchSummaryPreamble from "../../prompts/branch-summary-preamble.md" with { type: "text" };
+import branchSummaryPrompt from "../../prompts/compaction/branch-summary.md" with { type: "text" };
+import branchSummaryPreamble from "../../prompts/compaction/branch-summary-preamble.md" with { type: "text" };
 import {
 	convertToLlm,
 	createBranchSummaryMessage,

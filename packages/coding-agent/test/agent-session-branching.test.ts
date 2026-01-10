@@ -46,7 +46,6 @@ describe.skipIf(!API_KEY)("AgentSession branching", () => {
 		const toolSession: ToolSession = {
 			cwd: tempDir,
 			hasUI: false,
-			rulebookRules: [],
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 		};

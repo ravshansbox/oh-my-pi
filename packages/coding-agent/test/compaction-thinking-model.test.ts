@@ -52,7 +52,6 @@ describe.skipIf(!HAS_ANTIGRAVITY_AUTH)("Compaction with thinking models (Antigra
 		const toolSession: ToolSession = {
 			cwd: tempDir,
 			hasUI: false,
-			rulebookRules: [],
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 		};
@@ -162,7 +161,6 @@ describe.skipIf(!HAS_ANTHROPIC_AUTH)("Compaction with thinking models (Anthropic
 		const toolSession: ToolSession = {
 			cwd: tempDir,
 			hasUI: false,
-			rulebookRules: [],
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 		};

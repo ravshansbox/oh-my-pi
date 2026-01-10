@@ -4,7 +4,12 @@ The Task tool launches specialized agents (workers) that autonomously handle com
 
 ## Available Agents
 
-{{AGENTS_LIST}}
+{{#list agents prefix="- " join="\n"}}
+{{name}}: {{description}} (Tools: {{default (join tools ", ") "All tools"}})
+{{/list}}
+{{#if moreAgents}}
+  ...and {{moreAgents}} more agents
+{{/if}}
 
 ## When NOT to Use
 

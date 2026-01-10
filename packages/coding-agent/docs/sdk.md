@@ -374,7 +374,6 @@ All tools are defined in `BUILTIN_TOOLS`:
 - `notebook` - Jupyter notebook editing
 - `output` - Task output retrieval
 - `read` - File reading (text and images)
-- `rulebook` - Rule reference (requires rules)
 - `task` - Subagent spawning
 - `web_fetch` - Web page fetching
 - `web_search` - Web search
@@ -390,10 +389,8 @@ import { BUILTIN_TOOLS, createTools, type ToolSession } from "@oh-my-pi/pi-codin
 const session: ToolSession = {
 	cwd: "/path/to/project",
 	hasUI: false,
-	rulebookRules: [],
 	getSessionFile: () => null,
 	getSessionSpawns: () => "*",
-	getAvailableTools: () => Object.keys(BUILTIN_TOOLS),
 };
 
 const tools = await createTools(session);

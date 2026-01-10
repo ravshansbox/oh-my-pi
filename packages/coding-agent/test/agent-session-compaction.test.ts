@@ -50,7 +50,6 @@ describe.skipIf(!API_KEY)("AgentSession compaction e2e", () => {
 		const toolSession: ToolSession = {
 			cwd: tempDir,
 			hasUI: false,
-			rulebookRules: [],
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 		};

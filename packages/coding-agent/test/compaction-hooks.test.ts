@@ -88,7 +88,6 @@ describe.skipIf(!API_KEY)("Compaction hooks", () => {
 		const toolSession: ToolSession = {
 			cwd: tempDir,
 			hasUI: false,
-			rulebookRules: [],
 			getSessionFile: () => null,
 			getSessionSpawns: () => "*",
 		};

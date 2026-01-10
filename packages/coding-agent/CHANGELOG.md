@@ -1,6 +1,7 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Added
 
 - Added `/dump` slash command to copy the full session transcript to the clipboard
@@ -11,6 +12,7 @@
 
 ### Changed
 
+- Changed rules system to use `read` tool for loading rule content instead of dedicated `rulebook` tool
 - Separated `/export` and `/dump` commands—`/export` now only exports to HTML file, while `/dump` copies session transcript to clipboard
 - Updated `/export` command to no longer accept `--copy` flag (use `/dump` instead)
 - Changed prompt template rendering to use Handlebars instead of simple string replacement
@@ -25,6 +27,10 @@
 - Revised workflow instructions to require explicit planning for non-trivial tasks
 - Enhanced verification guidance to prefer external feedback loops like tests and linters
 - Added explicit alignment and prohibited behavior sections to improve response quality
+
+### Removed
+
+- Removed `rulebook` tool - rules are now loaded via the `read` tool instead of a dedicated tool
 
 ### Fixed
 

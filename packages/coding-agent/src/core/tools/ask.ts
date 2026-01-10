@@ -202,7 +202,6 @@ export function createAskTool(session: ToolSession): null | AgentTool<typeof ask
 export const askTool = createAskTool({
 	cwd: process.cwd(),
 	hasUI: false,
-	rulebookRules: [],
 	getSessionFile: () => null,
 	getSessionSpawns: () => "*",
 });

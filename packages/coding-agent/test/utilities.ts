@@ -84,7 +84,6 @@ export async function createTestSession(options: TestSessionOptions = {}): Promi
 	const toolSession: ToolSession = {
 		cwd: tempDir,
 		hasUI: false,
-		rulebookRules: [],
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 	};

@@ -91,7 +91,6 @@ import {
 	createSshTool,
 	createTools,
 	createWriteTool,
-	filterRulebookRules,
 	getWebSearchTools,
 	setPreferredImageProvider,
 	setPreferredWebSearchProvider,
@@ -654,7 +653,12 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	time("discoverTtsrRules");
 
 	// Filter rules for the rulebook (non-TTSR, non-alwaysApply, with descriptions)
-	const rulebookRules = filterRulebookRules(rulesResult.items);
+	const rulebookRules = rulesResult.items.filter((rule) => {
+		if (rule.ttsrTrigger) return false;
+		if (rule.alwaysApply) return false;
+		if (!rule.description) return false;
+		return true;
+	});
 	time("filterRulebookRules");
 
 	const contextFiles = options.contextFiles ?? discoverContextFiles(cwd, agentDir);
@@ -666,7 +670,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 	const toolSession: ToolSession = {
 		cwd,
 		hasUI: options.hasUI ?? false,
-		rulebookRules,
 		eventBus,
 		outputSchema: options.outputSchema,
 		requireCompleteTool: options.requireCompleteTool,

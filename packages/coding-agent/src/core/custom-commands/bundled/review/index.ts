@@ -166,20 +166,6 @@ function getRecommendedAgentCount(stats: DiffStats): number {
 }
 
 /**
- * Format diff stats as a markdown table for the prompt.
- */
-function formatFileTable(files: FileDiff[]): string {
-	if (files.length === 0) return "_No files to review._";
-
-	const rows = files.map((f) => {
-		const ext = getFileExt(f.path);
-		return `| ${f.path} | +${f.linesAdded}/-${f.linesRemoved} | ${ext} |`;
-	});
-
-	return `| File | +/- | Type |\n|------|-----|------|\n${rows.join("\n")}`;
-}
-
-/**
  * Extract first N lines of actual diff content (excluding headers) for preview.
  */
 function getDiffPreview(hunks: string, maxLines: number): string {
@@ -204,33 +190,6 @@ function getDiffPreview(hunks: string, maxLines: number): string {
 	return contentLines.join("\n");
 }
 
-/**
- * Format condensed diff previews for large changesets.
- */
-function formatDiffPreviews(files: FileDiff[], linesPerFile: number): string {
-	const parts: string[] = [];
-
-	for (const f of files) {
-		const preview = getDiffPreview(f.hunks, linesPerFile);
-		if (preview.trim()) {
-			parts.push(`#### ${f.path}\n\`\`\`diff\n${preview}\n\`\`\``);
-		}
-	}
-
-	return parts.join("\n\n");
-}
-
-/**
- * Format excluded files list for the prompt.
- */
-function formatExcluded(excluded: DiffStats["excluded"]): string {
-	if (excluded.length === 0) return "";
-
-	const items = excluded.map((e) => `- \`${e.path}\` (+${e.linesAdded}/-${e.linesRemoved}) — ${e.reason}`);
-
-	return `### Excluded Files (${excluded.length})\n\n${items.join("\n")}`;
-}
-
 // Thresholds for diff inclusion
 const MAX_DIFF_CHARS = 50_000; // Don't include diff above this
 const MAX_FILES_FOR_INLINE_DIFF = 20; // Don't include diff if more files than this
@@ -242,57 +201,26 @@ function buildReviewPrompt(mode: string, stats: DiffStats, rawDiff: string): str
 	const agentCount = getRecommendedAgentCount(stats);
 	const skipDiff = rawDiff.length > MAX_DIFF_CHARS || stats.files.length > MAX_FILES_FOR_INLINE_DIFF;
 	const totalLines = stats.totalAdded + stats.totalRemoved;
+	const linesPerFile = skipDiff ? Math.max(5, Math.floor(100 / stats.files.length)) : 0;
 
-	// Build distribution guidance
-	const distributionGuidance =
-		`Based on the diff weight (~${totalLines} lines across ${stats.files.length} files), ` +
-		(agentCount === 1 ? `use **1 reviewer agent**.` : `spawn **${agentCount} reviewer agents** in parallel.`);
+	const filesWithExt = stats.files.map((f) => ({
+		...f,
+		ext: getFileExt(f.path),
+		hunksPreview: skipDiff ? getDiffPreview(f.hunks, linesPerFile) : "",
+	}));
 
-	// Build grouping guidance (only for multi-agent)
-	const groupingGuidance =
-		agentCount > 1
-			? `Group files by locality (related changes together). For example:
-- Files in the same directory or module → same agent
-- Files that implement related functionality → same agent
-- Test files with their implementation files → same agent
-
-Use the Task tool with \`agent: "reviewer"\` and the batch \`tasks\` array to run reviews in parallel.`
-			: "";
-
-	// Build diff section
-	let diffSection: string;
-	if (!skipDiff) {
-		diffSection = `### Diff
-
-<diff>
-${rawDiff.trim()}
-</diff>`;
-	} else {
-		const linesPerFile = Math.max(5, Math.floor(100 / stats.files.length));
-		diffSection = `### Diff Previews
-
-_Full diff too large (${stats.files.length} files). Showing first ~${linesPerFile} lines per file. Reviewers should fetch full diffs for assigned files._
-
-${formatDiffPreviews(stats.files, linesPerFile)}`;
-	}
-
-	// Build diff instruction
-	const diffInstruction = skipDiff
-		? "Run `git diff` or `git show` to get the diff for assigned files"
-		: "Use the diff hunks provided below (don't re-run git diff)";
-
-	// Render template variables
 	return renderPromptTemplate(reviewRequestTemplate, {
-		MODE: mode,
-		FILE_COUNT: String(stats.files.length),
-		LINES_ADDED: String(stats.totalAdded),
-		LINES_REMOVED: String(stats.totalRemoved),
-		FILE_TABLE: formatFileTable(stats.files),
-		EXCLUDED_SECTION: stats.excluded.length > 0 ? formatExcluded(stats.excluded) : "",
-		DISTRIBUTION_GUIDANCE: distributionGuidance,
-		GROUPING_GUIDANCE: groupingGuidance,
-		DIFF_INSTRUCTION: diffInstruction,
-		DIFF_SECTION: diffSection,
+		mode,
+		files: filesWithExt,
+		excluded: stats.excluded,
+		totalAdded: stats.totalAdded,
+		totalRemoved: stats.totalRemoved,
+		totalLines,
+		agentCount,
+		multiAgent: agentCount > 1,
+		skipDiff,
+		rawDiff: rawDiff.trim(),
+		linesPerFile,
 	});
 }
 

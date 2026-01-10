@@ -5,7 +5,6 @@ function createTestSession(overrides: Partial<ToolSession> = {}): ToolSession {
 	return {
 		cwd: "/tmp/test",
 		hasUI: false,
-		rulebookRules: [],
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 		...overrides,
@@ -73,32 +72,6 @@ describe("createTools", () => {
 		const names = tools.map((t) => t.name);
 
 		expect(names).toContain("ask");
-	});
-
-	it("excludes rulebook tool when no rules provided", async () => {
-		const session = createTestSession({ rulebookRules: [] });
-		const tools = await createTools(session);
-		const names = tools.map((t) => t.name);
-
-		expect(names).not.toContain("rulebook");
-	});
-
-	it("includes rulebook tool when rules provided", async () => {
-		const session = createTestSession({
-			rulebookRules: [
-				{
-					path: "/test/rule.md",
-					name: "Test Rule",
-					content: "Test content",
-					description: "A test rule",
-					_source: { provider: "test", providerName: "Test", path: "/test", level: "project" },
-				},
-			],
-		});
-		const tools = await createTools(session);
-		const names = tools.map((t) => t.name);
-
-		expect(names).toContain("rulebook");
 	});
 
 	it("excludes git tool when disabled in settings", async () => {
@@ -174,7 +147,6 @@ describe("createTools", () => {
 			"notebook",
 			"output",
 			"read",
-			"rulebook",
 			"task",
 			"web_fetch",
 			"web_search",

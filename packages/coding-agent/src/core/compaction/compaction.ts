@@ -8,9 +8,9 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { AssistantMessage, Model, Usage } from "@oh-my-pi/pi-ai";
 import { complete, completeSimple } from "@oh-my-pi/pi-ai";
-import compactionSummaryPrompt from "../../prompts/compaction-summary.md" with { type: "text" };
-import compactionTurnPrefixPrompt from "../../prompts/compaction-turn-prefix.md" with { type: "text" };
-import compactionUpdateSummaryPrompt from "../../prompts/compaction-update-summary.md" with { type: "text" };
+import compactionSummaryPrompt from "../../prompts/compaction/compaction-summary.md" with { type: "text" };
+import compactionTurnPrefixPrompt from "../../prompts/compaction/compaction-turn-prefix.md" with { type: "text" };
+import compactionUpdateSummaryPrompt from "../../prompts/compaction/compaction-update-summary.md" with { type: "text" };
 import { convertToLlm, createBranchSummaryMessage, createCustomMessage } from "../messages";
 import { renderPromptTemplate } from "../prompt-templates";
 import type { CompactionEntry, SessionEntry } from "../session-manager";

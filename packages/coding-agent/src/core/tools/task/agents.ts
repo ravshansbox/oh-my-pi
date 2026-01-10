@@ -4,47 +4,72 @@
  * Agents are embedded at build time via Bun's import with { type: "text" }.
  */
 
+import exploreMd from "../../../prompts/agents/explore.md" with { type: "text" };
 // Embed agent markdown files at build time
-import exploreMd from "../../../prompts/explore.md" with { type: "text" };
-import planMd from "../../../prompts/plan.md" with { type: "text" };
-import reviewerMd from "../../../prompts/reviewer.md" with { type: "text" };
-import taskMd from "../../../prompts/task.md" with { type: "text" };
+import agentFrontmatterTemplate from "../../../prompts/agents/frontmatter.md" with { type: "text" };
+import planMd from "../../../prompts/agents/plan.md" with { type: "text" };
+import reviewerMd from "../../../prompts/agents/reviewer.md" with { type: "text" };
+import taskMd from "../../../prompts/agents/task.md" with { type: "text" };
 import { renderPromptTemplate } from "../../prompt-templates";
 import type { AgentDefinition, AgentSource } from "./types";
 
-const EMBEDDED_AGENTS: { name: string; content: string }[] = [
-	{ name: "explore.md", content: renderPromptTemplate(exploreMd) },
-	{ name: "plan.md", content: renderPromptTemplate(planMd) },
-	{ name: "reviewer.md", content: renderPromptTemplate(reviewerMd) },
+interface AgentFrontmatter {
+	name: string;
+	description: string;
+	spawns?: string;
+	model?: string;
+}
+
+interface EmbeddedAgentDef {
+	fileName: string;
+	frontmatter?: AgentFrontmatter;
+	template: string;
+}
+
+function buildAgentContent(def: EmbeddedAgentDef): string {
+	const body = renderPromptTemplate(def.template);
+	if (!def.frontmatter) return body;
+	return renderPromptTemplate(agentFrontmatterTemplate, { ...def.frontmatter, body });
+}
+
+const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [
+	{ fileName: "explore.md", template: exploreMd },
+	{ fileName: "plan.md", template: planMd },
+	{ fileName: "reviewer.md", template: reviewerMd },
 	{
-		name: "task.md",
-		content: `---
-name: task
-description: General-purpose subagent with full capabilities for delegated multi-step tasks
-spawns: explore
-model: default
----
-${renderPromptTemplate(taskMd)}`,
+		fileName: "task.md",
+		frontmatter: {
+			name: "task",
+			description: "General-purpose subagent with full capabilities for delegated multi-step tasks",
+			spawns: "explore",
+			model: "default",
+		},
+		template: taskMd,
 	},
 	{
-		name: "quick_task.md",
-		content: `---
-name: quick_task
-description: Quick task for fast execution
-model: pi/smol
----
-${renderPromptTemplate(taskMd)}`,
+		fileName: "quick_task.md",
+		frontmatter: {
+			name: "quick_task",
+			description: "Quick task for fast execution",
+			model: "pi/smol",
+		},
+		template: taskMd,
 	},
 	{
-		name: "deep_task.md",
-		content: `---
-name: deep_task
-description: Deep task for comprehensive reasoning
-model: pi/slow
----
-${renderPromptTemplate(taskMd)}`,
+		fileName: "deep_task.md",
+		frontmatter: {
+			name: "deep_task",
+			description: "Deep task for comprehensive reasoning",
+			model: "pi/slow",
+		},
+		template: taskMd,
 	},
 ];
+
+const EMBEDDED_AGENTS: { name: string; content: string }[] = EMBEDDED_AGENT_DEFS.map((def) => ({
+	name: def.fileName,
+	content: buildAgentContent(def),
+}));
 
 /**
  * Parse YAML frontmatter from markdown content.

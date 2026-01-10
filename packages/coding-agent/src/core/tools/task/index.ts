@@ -96,21 +96,11 @@ export { taskSchema } from "./types";
 async function buildDescription(cwd: string): Promise<string> {
 	const { agents } = await discoverAgents(cwd);
 
-	// Build agents list
-	const agentLines: string[] = [];
-	for (const agent of agents.slice(0, MAX_AGENTS_IN_DESCRIPTION)) {
-		const tools = agent.tools?.join(", ") || "All tools";
-		agentLines.push(`- ${agent.name}: ${agent.description} (Tools: ${tools})`);
-	}
-	if (agents.length > MAX_AGENTS_IN_DESCRIPTION) {
-		agentLines.push(`  ...and ${agents.length - MAX_AGENTS_IN_DESCRIPTION} more agents`);
-	}
-
-	// Fill template placeholders
 	return renderPromptTemplate(taskDescriptionTemplate, {
-		AGENTS_LIST: agentLines.join("\n"),
-		MAX_PARALLEL_TASKS: String(MAX_PARALLEL_TASKS),
-		MAX_CONCURRENCY: String(MAX_CONCURRENCY),
+		agents: agents.slice(0, MAX_AGENTS_IN_DESCRIPTION),
+		moreAgents: agents.length > MAX_AGENTS_IN_DESCRIPTION ? agents.length - MAX_AGENTS_IN_DESCRIPTION : 0,
+		MAX_PARALLEL_TASKS,
+		MAX_CONCURRENCY,
 	});
 }
 

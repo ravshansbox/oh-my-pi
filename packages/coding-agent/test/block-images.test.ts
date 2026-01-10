@@ -15,7 +15,6 @@ function createTestToolSession(cwd: string): ToolSession {
 	return {
 		cwd,
 		hasUI: false,
-		rulebookRules: [],
 		getSessionFile: () => null,
 		getSessionSpawns: () => "*",
 	};
