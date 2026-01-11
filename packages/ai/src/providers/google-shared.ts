@@ -189,7 +189,20 @@ export function convertMessages<T extends GoogleApiType>(model: Model<T>, contex
 	return contents;
 }
 
-function sanitizeSchemaForGoogle(value: unknown): unknown {
+const UNSUPPORTED_SCHEMA_FIELDS = new Set([
+	"$schema",
+	"$ref",
+	"$defs",
+	"$dynamicRef",
+	"$dynamicAnchor",
+	"format",
+	"examples",
+	"prefixItems",
+	"unevaluatedProperties",
+	"unevaluatedItems",
+]);
+
+export function sanitizeSchemaForGoogle(value: unknown): unknown {
 	if (Array.isArray(value)) {
 		return value.map((entry) => sanitizeSchemaForGoogle(entry));
 	}
@@ -202,8 +215,14 @@ function sanitizeSchemaForGoogle(value: unknown): unknown {
 	let constValue: unknown | undefined;
 
 	for (const [key, entry] of Object.entries(value)) {
+		if (UNSUPPORTED_SCHEMA_FIELDS.has(key)) {
+			continue;
+		}
 		if (key === "const") {
 			constValue = entry;
+			continue;
+		}
+		if (key === "additionalProperties" && entry === false) {
 			continue;
 		}
 		result[key] = sanitizeSchemaForGoogle(entry);

@@ -28,7 +28,10 @@ import {
 	mapStopReason,
 	mapToolChoice,
 	retainThoughtSignature,
+	sanitizeSchemaForGoogle,
 } from "./google-shared";
+
+export { sanitizeSchemaForGoogle };
 
 export interface GoogleOptions extends StreamOptions {
 	toolChoice?: "auto" | "none" | "any";

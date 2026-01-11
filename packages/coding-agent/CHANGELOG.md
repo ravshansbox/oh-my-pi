@@ -1,8 +1,11 @@
 # Changelog
 
 ## [Unreleased]
+
 ### Changed
 
+- Removed `format: "date-time"` from timestamp type conversion in JTD to JSON Schema transformation
+- Reorganized system prompt to display context, environment, and tools sections before discipline guidelines
 - Updated system prompt to show file paths more clearly in output
 - Improved YAML frontmatter parsing with better error messages including source file information
 

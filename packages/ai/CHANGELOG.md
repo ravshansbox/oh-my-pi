@@ -1,6 +1,14 @@
 # Changelog
 
 ## [Unreleased]
+### Changed
+
+- Exported `sanitizeSchemaForGoogle` utility function for external use
+
+### Fixed
+
+- Fixed Google provider schema sanitization to strip additional unsupported JSON Schema fields ($schema, $ref, $defs, format, examples, and others)
+- Fixed Google provider to ignore `additionalProperties: false` which is unsupported by the API
 
 ## [4.4.4] - 2026-01-11
 

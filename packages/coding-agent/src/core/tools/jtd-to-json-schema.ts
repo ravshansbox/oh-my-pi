@@ -108,12 +108,7 @@ function convertSchema(schema: unknown): unknown {
 		if (!jsonType) {
 			return { type: schema.type };
 		}
-		const result: Record<string, unknown> = { type: jsonType };
-		// Add format for timestamp
-		if (schema.type === "timestamp") {
-			result.format = "date-time";
-		}
-		return result;
+		return { type: jsonType };
 	}
 
 	// Enum form: { enum: ["a", "b"] } → { enum: ["a", "b"] }
