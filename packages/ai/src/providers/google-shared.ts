@@ -215,9 +215,9 @@ const UNSUPPORTED_SCHEMA_FIELDS = new Set([
 	"format",
 ]);
 
-export function sanitizeSchemaForGoogle(value: unknown): unknown {
+function sanitizeSchemaImpl(value: unknown, isInsideProperties: boolean): unknown {
 	if (Array.isArray(value)) {
-		return value.map((entry) => sanitizeSchemaForGoogle(entry));
+		return value.map((entry) => sanitizeSchemaImpl(entry, isInsideProperties));
 	}
 
 	if (!value || typeof value !== "object") {
@@ -248,7 +248,7 @@ export function sanitizeSchemaForGoogle(value: unknown): unknown {
 				// Copy description and other top-level fields (not the combiner)
 				for (const [key, entry] of Object.entries(obj)) {
 					if (key !== combiner && !(key in result)) {
-						result[key] = sanitizeSchemaForGoogle(entry);
+						result[key] = sanitizeSchemaImpl(entry, false);
 					}
 				}
 				return result;
@@ -259,13 +259,16 @@ export function sanitizeSchemaForGoogle(value: unknown): unknown {
 	// Regular field processing
 	let constValue: unknown;
 	for (const [key, entry] of Object.entries(obj)) {
-		if (UNSUPPORTED_SCHEMA_FIELDS.has(key)) continue;
+		// Only strip unsupported schema keywords when NOT inside "properties" object
+		// Inside "properties", keys are property names (e.g., "pattern") not schema keywords
+		if (!isInsideProperties && UNSUPPORTED_SCHEMA_FIELDS.has(key)) continue;
 		if (key === "const") {
 			constValue = entry;
 			continue;
 		}
 		if (key === "additionalProperties" && entry === false) continue;
-		result[key] = sanitizeSchemaForGoogle(entry);
+		// When key is "properties", child keys are property names, not schema keywords
+		result[key] = sanitizeSchemaImpl(entry, key === "properties");
 	}
 
 	if (constValue !== undefined) {
@@ -288,6 +291,10 @@ export function sanitizeSchemaForGoogle(value: unknown): unknown {
 	}
 
 	return result;
+}
+
+export function sanitizeSchemaForGoogle(value: unknown): unknown {
+	return sanitizeSchemaImpl(value, false);
 }
 
 function sanitizeToolForGoogle(tool: Tool): Tool {

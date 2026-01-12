@@ -198,6 +198,36 @@ describe("sanitizeSchemaForGoogle", () => {
 		expect(sanitizeSchemaForGoogle(true)).toBe(true);
 		expect(sanitizeSchemaForGoogle(null)).toBe(null);
 	});
+
+	it("preserves property names that match schema keywords (e.g., 'pattern')", () => {
+		const schema = {
+			type: "object",
+			properties: {
+				pattern: { type: "string", description: "The search pattern" },
+				format: { type: "string", description: "Output format" },
+			},
+			required: ["pattern"],
+		};
+		const sanitized = sanitizeSchemaForGoogle(schema) as Record<string, unknown>;
+		const props = sanitized.properties as Record<string, unknown>;
+		expect(props.pattern).toEqual({ type: "string", description: "The search pattern" });
+		expect(props.format).toEqual({ type: "string", description: "Output format" });
+		expect(sanitized.required).toEqual(["pattern"]);
+	});
+
+	it("still strips schema keywords from non-properties contexts", () => {
+		const schema = {
+			type: "string",
+			pattern: "^[a-z]+$",
+			format: "email",
+			minLength: 1,
+		};
+		const sanitized = sanitizeSchemaForGoogle(schema) as Record<string, unknown>;
+		expect(sanitized.pattern).toBeUndefined();
+		expect(sanitized.format).toBeUndefined();
+		expect(sanitized.minLength).toBeUndefined();
+		expect(sanitized.type).toBe("string");
+	});
 });
 
 describe("tool schema validation (post-sanitization)", () => {

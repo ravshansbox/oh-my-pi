@@ -5,6 +5,7 @@
 
 - Fixed incorrect classification of thought signatures in Google Gemini responses—thought signatures are now correctly treated as metadata rather than thinking content indicators
 - Fixed thought signature handling in Google Gemini CLI and Vertex AI streaming to properly preserve signatures across text deltas
+- Fixed Google schema sanitization stripping property names that match schema keywords (e.g., "pattern", "format") from tool definitions
 
 ## [4.5.0] - 2026-01-12
 

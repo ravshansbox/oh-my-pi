@@ -32,5 +32,4 @@ describe("Google thinking detection (thoughtSignature)", () => {
 		const updated = retainThoughtSignature("sig-1", "sig-2");
 		expect(updated).toBe("sig-2");
 	});
-
 });
